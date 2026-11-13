@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: u-app
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # Kaggle Android build engine — server-side only. Built-in defaults are
+      # already wired; these optional variables override them.
+      - key: KAGGLE_USERNAME
+        sync: false
+      - key: KAGGLE_KEY
+        sync: false
+      - key: KAGGLE_TIMEOUT_MINUTES
+        value: "30"
+      - key: KAGGLE_WORKER_SLUG
+        value: uapp-android-build-worker
+      - key: FIREBASE_PROJECT_ID
+        value: dmakenow
+      - key: FIREBASE_DATABASE_URL
+        value: https://dmakenow-default-rtdb.firebaseio.com
+      - key: REQUIRE_AUTH
+        value: "true"
+      - key: DATA_DIR
+        value: /tmp/uapp-data
+      - key: DOWNLOAD_TTL_SECONDS
+        value: "540"
+      - key: BUILD_UPLOAD_SECRET
+        generateValue: true
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: UPI_ID
+        sync: false
+      - key: UPI_PAYEE_NAME
+        sync: false
+      - key: APP_URL
+        sync: false

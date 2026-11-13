@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#07080b" />
+    <meta
+      name="description"
+      content="U APP is the premium app creation platform. Convert a website, HTML, ZIP or Android project into a real mobile app. Build anything. Launch everywhere."
+    />
+    <title>U APP — Build Anything. Launch Everywhere.</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2307080b'/%3E%3Cpath d='M18 16v20a14 14 0 0 0 28 0V16' stroke='%23c9f65b' stroke-width='7' stroke-linecap='round' fill='none'/%3E%3Ccircle cx='46' cy='18' r='4' fill='%23c9f65b'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <script>
+      // Direct-path support: if the host serves this app for a known route
+      // without a hash, translate it so refresh/direct links never 404.
+      (function () {
+        var known = ["/login", "/register", "/verify-id", "/verify-id.php", "/plans", "/api-docs", "/api-doce-app", "/api-docs.php", "/ad-docs", "/api-doce", "/api-doce.php", "/pay", "/pay.php", "/app", "/support", "/dashboard", "/apps"];
+        var p = location.pathname.replace(/\/$/, "");
+        if (!location.hash && p && p !== "/" && (known.indexOf(p) === 0 || p.indexOf("/app/") === 0 || known.indexOf(p) !== -1)) {
+          location.replace("/#" + p + location.search);
+        }
+      })();
+    </script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

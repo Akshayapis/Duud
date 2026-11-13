@@ -1,0 +1,97 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid",
+
+        "profile": {
+          ".write": "auth != null && auth.uid === $uid"
+        },
+        "uid": { ".write": false },
+        "email": { ".write": false },
+        "emailVerified": { ".write": false },
+        "accountStatus": { ".write": false },
+        "createdAt": { ".write": false },
+        "authenticationProvider": { ".write": false },
+
+        "subscription": { ".write": false },
+        "planId": { ".write": false },
+        "plan": { ".write": false },
+        "planActivatedAt": { ".write": false },
+        "planExpiresAt": { ".write": false },
+        "quota": { ".write": false },
+        "usedCredits": { ".write": false },
+        "monthlyAllowance": { ".write": false },
+
+        "activity": {
+          "$eventId": {
+            ".write": "auth != null && auth.uid === $uid"
+          }
+        },
+        "projects": {
+          "$projectId": {
+            ".write": "auth != null && auth.uid === $uid",
+            "plan": { ".write": false },
+            "quotaCharged": { ".write": false }
+          }
+        },
+        "apiKeys": {
+          "$keyId": {
+            ".read": "auth != null && auth.uid === $uid",
+            ".write": false
+          }
+        },
+        "devices": {
+          "$tokenId": {
+            ".write": "auth != null && auth.uid === $uid"
+          }
+        },
+        "support": {
+          "$requestId": {
+            ".write": "auth != null && auth.uid === $uid",
+            "deliveryStatus": { ".write": false },
+            "adminReply": { ".write": false }
+          }
+        }
+      }
+    },
+
+    "payments": {
+      "$uid": {
+        "$paymentId": {
+          ".read": "auth != null && auth.uid === $uid",
+          ".write": "auth != null && auth.uid === $uid",
+          "status": { ".write": false },
+          "approvedAt": { ".write": false },
+          "approvedBy": { ".write": false },
+          "rejectionReason": { ".write": false },
+          "amount": { ".write": false },
+          "planId": { ".write": false }
+        }
+      }
+    },
+
+    "plans": {
+      ".read": true,
+      ".write": false
+    },
+
+    "builds": {
+      "$projectId": {
+        "$buildId": {
+          ".read": "auth != null && root.child('users').child(auth.uid).child('projects').child($projectId).exists()",
+          ".write": false
+        }
+      }
+    },
+
+    "system": {
+      ".read": false,
+      ".write": false
+    }
+  }
+}
