@@ -131,7 +131,7 @@ export function PublicFooter() {
                 {theme === "dark" ? "Light theme" : "Dark theme"}
               </button>
               <span className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-[11px] font-medium text-muted">
-                <Code2 className="h-3 w-3" /> Kaggle build engine
+                <Code2 className="h-3 w-3" /> Android build engine
               </span>
             </div>
           </div>

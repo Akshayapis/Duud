@@ -36,14 +36,13 @@ import { TemplateMini } from "@/components/TemplateMini";
 import {
   AD_TIMINGS,
   APP_TYPES,
-  NETWORKS,
   PERMISSIONS,
   TEMPLATES,
   type AppType,
 } from "@/data/catalog";
 import { useStore } from "@/lib/store";
 import { uploadSource } from "@/lib/buildService";
-import { loadManagedAds, placementId, saveManagedAd } from "@/lib/ads";
+import { AD_SDK, TEST_AD_UNITS } from "@/lib/ads";
 import { cn } from "@/utils/cn";
 
 const ICONS: Record<string, typeof Globe2> = {
@@ -152,14 +151,14 @@ export default function BuilderPage() {
   const [network, setNetwork] = useState("Wi-Fi + mobile data");
   const [permissions, setPermissions] = useState<string[]>(["internet", "network"]);
   const [adsChoice, setAdsChoice] = useState<"skip" | "configure">("skip");
-  const [networkId, setNetworkId] = useState("admob");
 
   const [formats, setFormats] = useState<string[]>(["Banner"]);
   const [timing, setTiming] = useState("30 seconds");
-  const manualAds = true;
   const [customTiming, setCustomTiming] = useState("");
   const [adConsent, setAdConsent] = useState(false);
   const [adAppId, setAdAppId] = useState("");
+  const [adTestMode, setAdTestMode] = useState(true);
+  const [adUnits, setAdUnits] = useState<Record<string, string>>({});
   const [templateId, setTemplateId] = useState<number | null>(null);
   const [templateCat, setTemplateCat] = useState("All");
   const [templateQ, setTemplateQ] = useState("");
@@ -178,7 +177,6 @@ export default function BuilderPage() {
     [templateCat, templateQ]
   );
   const selectedTemplate = TEMPLATES.find((t) => t.id === templateId) ?? null;
-  const selectedNetwork = NETWORKS.find((n) => n.id === networkId) ?? NETWORKS[0];
 
   const steps = ["App type", "Source", "App details", "Permissions", "Ads", "UI template", "Review"];
   const canProceed = [
@@ -305,12 +303,12 @@ export default function BuilderPage() {
       `Source validated: ${src}`,
       `Template: ${selectedTemplate.name}`,
       `Permissions generated: ${permissions.length}`,
-      adsChoice === "configure" && adsEligible ? `Ads configured: ${selectedNetwork.name}` : "Ad configuration skipped",
+      adsChoice === "configure" ? `Ads configured: Google AdMob (${adTestMode ? "test inventory" : "live"})` : "Ad configuration skipped",
     ];
     if (sourceMode === "zip" && zip) notes.push(`ZIP scan: ${zip.supported.length} supported · ${zip.partial.length} partial · ${zip.unsupported.length} unsupported`);
-    if (sourceMode === "url") notes.push("WebView embedding limitations reviewed; frame-blocking sites may not render fully.");
+    if (sourceMode === "url") notes.push("Source loads directly in the app WebView (no iframe wrapper).");
 
-    // Preserve the original project on the server (disk + Kaggle dataset) so Create Again
+    // Preserve the original project on the server so Create Again
     // can rebuild without the user uploading it again.
     let sourceId: string | undefined;
     if (sourceMode === "zip" && zipFile) {
@@ -318,14 +316,16 @@ export default function BuilderPage() {
       try {
         const uploaded = await uploadSource(packageId || name || "app", zipFile);
         sourceId = uploaded.sourceId;
-        notes.push("Original ZIP preserved on the server and as a Kaggle source dataset");
+        notes.push("Original ZIP preserved on secure server storage");
       } catch (e) {
-        notes.push(`Source preservation warning: ${(e as Error).message}`);
-        toast("ZIP could not be preserved on the server; the app will still be created. Kaggle APK build needs a reachable source.", "info");
+        setUploading(false);
+        toast(`Source upload failed — the app was NOT created: ${(e as Error).message}`, "error");
+        return;
       } finally {
         setUploading(false);
       }
     } else if (sourceMode === "code" && code.trim()) {
+      setUploading(true);
       try {
         const { default: JSZip } = await import("jszip");
         const archive = new JSZip();
@@ -334,8 +334,15 @@ export default function BuilderPage() {
         sourceId = (await uploadSource(packageId || name || "app", new File([blob], `${packageId || "app"}-source.zip`, { type: "application/zip" }))).sourceId;
         notes.push("Pasted HTML preserved as a source ZIP for rebuilds");
       } catch (e) {
-        notes.push(`HTML source preservation warning: ${(e as Error).message}`);
+        setUploading(false);
+        toast(`HTML upload failed — the app was NOT created: ${(e as Error).message}`, "error");
+        return;
+      } finally {
+        setUploading(false);
       }
+    } else if (sourceMode === "url" && !/^https:\/\//i.test(url.trim())) {
+      toast("A valid HTTPS website URL is required for this app type.", "error");
+      return;
     }
 
     const res = createApp({
@@ -347,10 +354,13 @@ export default function BuilderPage() {
       template: selectedTemplate.name,
       templateId: selectedTemplate.id,
       permissions,
-      adsEnabled: adsChoice === "configure" && adsEligible,
-      adNetwork: adsEligible ? selectedNetwork.name : undefined,
-      adFormats: adsEligible ? formats : [],
-      adTiming: adsEligible ? (timing === "Custom" ? customTiming || "Custom" : timing) : undefined,
+      adsEnabled: adsChoice === "configure",
+      adNetwork: adsChoice === "configure" ? "Google AdMob" : undefined,
+      adFormats: adsChoice === "configure" ? formats : [],
+      adTiming: adsChoice === "configure" ? (timing === "Custom" ? customTiming || "Custom" : timing) : undefined,
+      adTestMode: adsChoice === "configure" ? adTestMode : undefined,
+      adAppId: adsChoice === "configure" && !adTestMode ? adAppId.trim() : undefined,
+      adUnits: adsChoice === "configure" && !adTestMode ? Object.fromEntries(formats.map((f) => [f.toLowerCase(), (adUnits[f] || "").trim()])) : undefined,
       version,
       buildType,
       artifactMb: sourceMode === "zip" && zip ? Math.max(2.2, Math.round((zip.size / 1024 / 1024) * 1.8 * 10) / 10) : 4.8,
@@ -482,7 +492,7 @@ export default function BuilderPage() {
                   </div>
                   <div className="flex gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
                     <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
-                    <p className="text-[10.5px] leading-relaxed text-muted">Sites that send <span className="font-mono text-ink">X-Frame-Options: DENY</span> or use login providers that block embedded browsers may not render fully. U APP detects and reports this — it never silently pretends the site is embeddable.</p>
+                    <p className="text-[10.5px] leading-relaxed text-muted">Sites that block embedded browsers or require unsupported login flows may not render fully in a WebView. U APP reports build/source limitations — it never silently pretends the site is embeddable.</p>
                   </div>
                 </div>
               )}
@@ -674,153 +684,117 @@ export default function BuilderPage() {
             <div className="animate-rise">
               <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
                 <div>
-                  <h2 className="font-display text-[18px] font-semibold text-ink">Ad network setup</h2>
-                  <p className="mt-1 text-[11.5px] text-muted">Network chuno → jo formats woh support karta hai woh box khulega → App ID aur formats confirm karke Done karo.</p>
+                  <h2 className="font-display text-[18px] font-semibold text-ink">Ad integration · Google AdMob</h2>
+                  <p className="mt-1 text-[11.5px] text-muted">Builds compile the official GMA Next-Gen SDK {AD_SDK.version} with UMP consent. Test inventory is available on every plan; live ads need your real AdMob IDs and a paid plan.</p>
                 </div>
-                <Badge tone={adsEligible ? "green" : "amber"}>{adsEligible ? `${plan.name} · eligible` : "Upgrade required"}</Badge>
+                <Badge tone={adsChoice === "configure" ? "lime" : "neutral"}>{adsChoice === "configure" ? (adTestMode ? "Test inventory" : "Live ads") : "Ads off"}</Badge>
               </div>
 
-              {!adsEligible ? (
-                <div className="space-y-3">
-                  <div className="relative overflow-hidden rounded-xl border border-line bg-panel2/50 p-5">
-                    <div className="absolute right-3 top-3 rounded-full border border-line bg-panel px-2 py-1 text-[9px] font-bold uppercase text-muted"><Lock className="mr-1 inline h-3 w-3" /> Locked</div>
-                    <div className="grid h-10 w-10 place-items-center rounded-xl bg-panel text-muted"><Zap className="h-5 w-5" /></div>
-                    <h3 className="mt-3 font-display text-[16px] font-semibold text-ink">Ad integration is disabled on the Free plan</h3>
-                    <p className="mt-1.5 max-w-lg text-[11px] leading-relaxed text-muted">
-                      Free apps can still be created within your monthly credits, but ad network credentials cannot be
-                      activated and ad configuration is excluded from free builds. Upgrade to Creator or above to monetise.
-                    </p>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <Link to="/app/plans" className={buttonClass("lime", "sm")}><Zap className="h-3.5 w-3.5" /> Upgrade plan</Link>
-                      <Button variant="secondary" size="sm" onClick={() => { setAdsChoice("skip"); setStep(5); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Skip ads & continue <ArrowRight className="h-3.5 w-3.5" /></Button>
-                    </div>
-                  </div>
-                  <p className="text-[10px] text-muted">Skip button seedha UI template picker kholta hai. Koi wait nahi.</p>
+              <div className="space-y-3">
+                <div className="flex gap-1 rounded-lg border border-line bg-panel2/50 p-1">
+                  <button onClick={() => setAdsChoice("configure")} className={cn("flex-1 rounded-md px-2 py-1.5 text-[10.5px] font-semibold", adsChoice === "configure" ? "bg-panel text-ink shadow-sm" : "text-muted")}>Configure ads</button>
+                  <button onClick={() => setAdsChoice("skip")} className={cn("flex-1 rounded-md px-2 py-1.5 text-[10.5px] font-semibold", adsChoice === "skip" ? "bg-panel text-ink shadow-sm" : "text-muted")}>Skip ads</button>
                 </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="flex gap-1 rounded-lg border border-line bg-panel2/50 p-1">
-                    <button onClick={() => setAdsChoice("configure")} className={cn("flex-1 rounded-md px-2 py-1.5 text-[10.5px] font-semibold", adsChoice === "configure" ? "bg-panel text-ink shadow-sm" : "text-muted")}>Configure ads</button>
-                    <button onClick={() => setAdsChoice("skip")} className={cn("flex-1 rounded-md px-2 py-1.5 text-[10.5px] font-semibold", adsChoice === "skip" ? "bg-panel text-ink shadow-sm" : "text-muted")}>Skip ads</button>
-                  </div>
 
-                  {adsChoice === "skip" ? (
-                    <div className="rounded-xl border border-line bg-panel2/50 p-6 text-center">
-                      <Layers className="mx-auto h-6 w-6 text-muted" />
-                      <p className="mt-2 text-[12px] font-semibold text-ink">Ads skipped for this build</p>
-                      <p className="mt-1 text-[10.5px] text-muted">Ads baad mein project se configure kar sakte ho aur rebuild kar sakte ho (0 credit).</p>
-                      <Button variant="lime" size="sm" className="mt-3" onClick={() => setStep(5)}>Choose UI template <ArrowRight className="h-3.5 w-3.5" /></Button>
+                {adsChoice === "skip" ? (
+                  <div className="rounded-xl border border-line bg-panel2/50 p-6 text-center">
+                    <Layers className="mx-auto h-6 w-6 text-muted" />
+                    <p className="mt-2 text-[12px] font-semibold text-ink">Ads skipped for this build</p>
+                    <p className="mt-1 text-[10.5px] text-muted">You can rebuild later with ads enabled. Rebuilds do not consume an app creation credit.</p>
+                    <Button variant="lime" size="sm" className="mt-3" onClick={() => setStep(5)}>Choose UI template <ArrowRight className="h-3.5 w-3.5" /></Button>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-lime/30 bg-lime/[0.03] p-3">
+                    <label className="flex items-start gap-2 rounded-lg border border-line bg-panel px-2.5 py-2">
+                      <input type="checkbox" checked={adTestMode} onChange={(e) => setAdTestMode(e.target.checked)} className="mt-0.5 h-3.5 w-3.5 accent-lime" />
+                      <span className="text-[10px] leading-relaxed text-muted"><span className="font-semibold text-ink">Use Google test inventory.</span> Safe for development and available on every plan. Turn this off only when you have real AdMob App ID + ad unit IDs and an active paid plan.</span>
+                    </label>
+
+                    {!adTestMode && !adsEligible && (
+                      <div className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/5 p-2.5 text-[9.5px] leading-relaxed text-muted">
+                        Live ads require a paid plan. <Link to="/app/plans" className="font-semibold text-ink underline decoration-line underline-offset-2">View plans</Link>, or keep test inventory enabled.
+                      </div>
+                    )}
+
+                    {!adTestMode && (
+                      <div className="mt-2.5 rounded-lg border border-line bg-panel p-2.5">
+                        <div className="mb-1 text-[8px] uppercase tracking-wider text-muted">AdMob App ID</div>
+                        <Input value={adAppId} onChange={(e) => setAdAppId(e.target.value)} placeholder="ca-app-pub-XXXXXXXXXXXXXXXX~YYYYYYYYYY" className="h-9 font-mono text-[10px]" aria-label="AdMob App ID" />
+                        <p className="mt-1 text-[8px] text-muted">From AdMob → Apps. Test App IDs are rejected for live builds.</p>
+                      </div>
+                    )}
+
+                    <div className="mt-2.5">
+                      <div className="mb-1.5 flex items-center justify-between">
+                        <div className="text-[10.5px] font-semibold text-ink">Ad formats</div>
+                        <span className="text-[8.5px] text-muted">{formats.length} selected</span>
+                      </div>
+                      <div className="grid gap-1.5 sm:grid-cols-2">
+                        {["Banner", "Adaptive Banner", "MREC", "Interstitial", "Rewarded", "Rewarded Interstitial", "App Open"].map((f) => {
+                          const on = formats.includes(f);
+                          return (
+                            <div key={f} className={cn("rounded-lg border px-2.5 py-2", on ? "border-lime/50 bg-lime/[0.06]" : "border-line bg-panel")}>
+                              <button onClick={() => flipFormat(f)} className="flex w-full items-center gap-2 text-left">
+                                <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded border", on ? "border-lime bg-lime text-limeink" : "border-line")}>{on && <Check className="h-3 w-3" />}</span>
+                                <span className="text-[9.5px] font-semibold text-ink">{f}</span>
+                              </button>
+                              {on && !adTestMode && (
+                                <Input
+                                  value={adUnits[f] ?? ""}
+                                  onChange={(e) => setAdUnits((u) => ({ ...u, [f]: e.target.value }))}
+                                  placeholder="ca-app-pub-XXXXXXXXXXXXXXXX/ZZZZZZZZZZ"
+                                  className="mt-1.5 h-8 font-mono text-[9px]"
+                                  aria-label={`${f} ad unit ID`}
+                                />
+                              )}
+                              {on && adTestMode && (
+                                <div className="mt-1 truncate font-mono text-[8px] text-muted">{TEST_AD_UNITS[f.toLowerCase()]}</div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  ) : (
-                    <>
+
+                    <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
                       <div>
-                        <div className="mb-1.5 flex items-center justify-between">
-                          <span className="text-[11px] font-semibold text-ink">1. Select ad network</span>
-                          <span className="text-[9px] text-muted">{NETWORKS.length} supported</span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-                          {NETWORKS.map((n) => (
-                            <button key={n.id} onClick={() => { setNetworkId(n.id); setFormats(n.formats.filter((f) => ["Banner", "Interstitial", "Rewarded", "Native"].includes(f)).slice(0, 2)); }} className={cn("rounded-lg border px-2 py-2 text-left text-[9.5px] font-medium leading-tight transition", networkId === n.id ? "border-lime/50 bg-lime/[0.06] text-ink ring-1 ring-lime/25" : "border-line bg-panel text-muted hover:text-ink")}>{n.name}</button>
-                          ))}
-                        </div>
+                        <div className="mb-1 text-[8px] uppercase tracking-wider text-muted">Interstitial frequency cap</div>
+                        <Select value={timing} onChange={(e) => setTiming(e.target.value)} className="h-9 text-[10px]">{AD_TIMINGS.map((t) => <option key={t}>{t}</option>)}</Select>
                       </div>
-
-                      <div className="rounded-xl border border-lime/30 bg-lime/[0.03] p-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-2">
-                          <div className="flex items-center gap-2">
-                            <div className="grid h-8 w-8 place-items-center rounded-lg bg-lime text-limeink"><Zap className="h-4 w-4" /></div>
-                            <div>
-                              <div className="text-[11.5px] font-semibold text-ink">{selectedNetwork.name}</div>
-                              <div className="text-[9px] text-muted uppercase tracking-wider">Network setup · step {2}</div>
-                            </div>
-                          </div>
-                          <span className="rounded bg-panel2 px-1.5 py-0.5 font-mono text-[8px] text-muted">official SDK</span>
-                        </div>
-
-                        <div className="mt-2.5 rounded-lg border border-line bg-panel p-2.5">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div>
-                              <div className="text-[10px] font-semibold text-ink">App / Game ID</div>
-                              <div className="text-[8.5px] leading-relaxed text-muted">Platform-managed App ID prefilled. Chahiye to apna network App ID daal sakte ho — warna yahi use hoga.</div>
-                            </div>
-                            <span className="rounded bg-lime px-1.5 py-0.5 text-[7px] font-bold uppercase text-limeink">managed</span>
-                          </div>
-                          <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
-                            <div>
-                              <div className="mb-1 text-[8px] uppercase tracking-wider text-muted">App / Game ID</div>
-                              <Input value={adAppId} onChange={(e) => setAdAppId(e.target.value)} placeholder={loadManagedAds()[networkId]?.appId ?? "Platform App ID"} className="h-9 font-mono text-[10px]" aria-label="App or Game ID" />
-                            </div>
-                            <div>
-                              <div className="mb-1 text-[8px] uppercase tracking-wider text-muted">Auto placement ID</div>
-                              <div className="flex h-9 items-center truncate rounded-xl border border-line bg-panel2/60 px-2.5 font-mono text-[9.5px] text-muted">{placementId(packageId || "app.package.id", networkId, formats[0] ?? "banner")}</div>
-                            </div>
-                          </div>
-                          <div className="mt-1 text-[8px] text-muted">Effective ID: <span className="font-mono text-ink/80">{adAppId || loadManagedAds()[networkId]?.appId}</span> · <a href={selectedNetwork.docs} target="_blank" rel="noreferrer" className="font-semibold text-ink underline decoration-line underline-offset-2">official docs</a></div>
-                        </div>
-
-                        <div className="mt-2.5">
-                          <div className="mb-1.5 flex items-center justify-between">
-                            <div className="text-[10.5px] font-semibold text-ink">Ad types this network supports</div>
-                            <span className="text-[8.5px] text-muted">{formats.length}/{selectedNetwork.formats.length} selected</span>
-                          </div>
-                          <div className="grid gap-1.5 sm:grid-cols-2">
-                            {selectedNetwork.formats.map((f) => {
-                              const on = formats.includes(f);
-                              return (
-                                <button key={f} onClick={() => flipFormat(f)} className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition", on ? "border-lime/50 bg-lime/[0.06]" : "border-line bg-panel hover:bg-panel2/50")}>
-                                  <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded border", on ? "border-lime bg-lime text-limeink" : "border-line")}>{on && <Check className="h-3 w-3" />}</span>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="text-[9.5px] font-semibold text-ink">{f}</div>
-                                    <div className="text-[8px] text-muted">{["Banner", "Adaptive Banner", "MREC", "Native"].includes(f) ? "On-screen placement" : "Request on button click"}</div>
-                                  </div>
-                                </button>
-                              );
-                            })}
-                          </div>
-                          <div className="mt-1.5 flex items-center justify-between rounded-lg border border-line bg-panel px-2.5 py-1.5">
-                            <span className="text-[9px] text-muted">Select all {selectedNetwork.formats.length} formats</span>
-                            <Button variant="ghost" size="sm" onClick={() => setFormats(formats.length === selectedNetwork.formats.length ? [] : [...selectedNetwork.formats])}>{formats.length === selectedNetwork.formats.length ? "Clear" : "Select all"}</Button>
-                          </div>
-                        </div>
-
-                        <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
-                          <div>
-                            <div className="mb-1 text-[8px] uppercase tracking-wider text-muted">Placement timing</div>
-                            <Select value={timing} onChange={(e) => setTiming(e.target.value)} className="h-9 text-[10px]">{AD_TIMINGS.map((t) => <option key={t}>{t}</option>)}</Select>
-                          </div>
-                          <div>
-                            <div className="mb-1 text-[8px] uppercase tracking-wider text-muted">Custom timing</div>
-                            <Input value={customTiming} onChange={(e) => setCustomTiming(e.target.value)} placeholder="e.g. every 2 minutes" className="h-9 text-[10px]" disabled={timing !== "Custom"} />
-                          </div>
-                        </div>
-
-                        <label className="mt-2 flex items-start gap-2 rounded-lg border border-line bg-panel px-2.5 py-2 text-[8.5px] leading-relaxed text-muted">
-                          <input type="checkbox" checked={adConsent} onChange={(e) => setAdConsent(e.target.checked)} className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-lime" />
-                          <span>I confirm the official SDK, consent rules and placement policies will be followed. The platform App ID is used unless I provide my own.</span>
-                        </label>
-
-                        <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-line pt-2.5">
-                          <Button variant="lime" size="sm" disabled={!adConsent || formats.length === 0} onClick={() => {
-                            if (formats.length === 0) { toast("Select at least one ad type this network supports.", "error"); return; }
-                            if (adAppId.trim()) saveManagedAd(networkId, { appId: adAppId.trim(), label: "User supplied App ID", docs: selectedNetwork.docs });
-                            setAdsChoice("configure");
-                            setStep(5);
-                            window.scrollTo({ top: 0, behavior: "smooth" });
-                            toast("Ad setup saved. Choose the app UI next.", "success");
-                          }}><Check className="h-3.5 w-3.5" /> Done — continue to UI</Button>
-                          <Button variant="secondary" size="sm" onClick={() => { setAdsChoice("skip"); setStep(5); }}>Skip ads</Button>
-                          <span className="text-[8.5px] text-muted">{formats.length} format(s) · {timing}</span>
-                        </div>
+                      <div>
+                        <div className="mb-1 text-[8px] uppercase tracking-wider text-muted">Custom seconds</div>
+                        <Input value={customTiming} onChange={(e) => setCustomTiming(e.target.value)} placeholder="e.g. 90" className="h-9 text-[10px]" disabled={timing !== "Custom"} />
                       </div>
+                    </div>
 
-                      <div className="rounded-lg border border-line bg-panel2/40 px-2.5 py-2">
-                        <div className="text-[9px] font-semibold text-ink">Where to place ad load tags</div>
-                        <p className="mt-0.5 text-[8.5px] leading-relaxed text-muted">Banner/MREC ka div HTML mein wahan paste karo jahan ad dikhna chahiye. Reward/Interstitial ka function kisi bhi button ke <span className="font-mono">onclick</span> se call karo. Tags copy/download karne ke liye <Link to="/ad-docs" className="font-semibold text-ink underline decoration-line underline-offset-2">Ad SDK reference</Link> kholo.</p>
-                      </div>
-                    </>
-                  )}
+                    <label className="mt-2 flex items-start gap-2 rounded-lg border border-line bg-panel px-2.5 py-2 text-[8.5px] leading-relaxed text-muted">
+                      <input type="checkbox" checked={adConsent} onChange={(e) => setAdConsent(e.target.checked)} className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-lime" />
+                      <span>I will follow AdMob placement policies. Full-screen ads show on user action or app foreground; UMP consent is gathered before ad requests.</span>
+                    </label>
+
+                    <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-line pt-2.5">
+                      <Button variant="lime" size="sm" disabled={!adConsent || formats.length === 0 || (!adTestMode && !adsEligible)} onClick={() => {
+                        if (!adTestMode) {
+                          if (!/^ca-app-pub-\d{16}~\d{10}$/.test(adAppId.trim())) { toast("Enter a real AdMob App ID for live ads.", "error"); return; }
+                          for (const f of formats) {
+                            if (!/^ca-app-pub-\d{16}\/\d{10}$/.test((adUnits[f] || "").trim())) { toast(`Enter a real ad unit ID for ${f}.`, "error"); return; }
+                          }
+                        }
+                        setStep(5);
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                        toast("Ad setup saved. Choose the app UI next.", "success");
+                      }}><Check className="h-3.5 w-3.5" /> Done — continue to UI</Button>
+                      <Button variant="secondary" size="sm" onClick={() => { setAdsChoice("skip"); setStep(5); }}>Skip ads</Button>
+                      <span className="text-[8.5px] text-muted">{formats.length} format(s) · {adTestMode ? "test" : "live"}</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="rounded-lg border border-line bg-panel2/40 px-2.5 py-2">
+                  <div className="text-[9px] font-semibold text-ink">Where to place ad load tags</div>
+                  <p className="mt-0.5 text-[8.5px] leading-relaxed text-muted">Banner/MREC anchors to the screen bottom. Reward/Interstitial calls go on button clicks via <span className="font-mono">window.UAppAds.request(...)</span>. Copy/download tags from the <Link to="/ad-docs" className="font-semibold text-ink underline decoration-line underline-offset-2">Ad SDK reference</Link>.</p>
                 </div>
-              )}
+              </div>
             </div>
           )}
 
@@ -885,7 +859,7 @@ export default function BuilderPage() {
                   ["Build type", buildType],
                   ["Version", version],
                   ["Permissions", `${permissions.length} selected`],
-                  ["Ads", adsChoice === "configure" && adsEligible ? `${selectedNetwork.name} · ${formats.length} formats · ${timing}` : "Skipped / not eligible"],
+                  ["Ads", adsChoice === "configure" ? `Google AdMob · ${formats.length} formats · ${adTestMode ? "test" : "live"}` : "Skipped"],
                   ["Offline behaviour", offline],
                 ].map(([k, v]) => (
                   <div key={k} className="flex items-start justify-between gap-4 border-b border-line px-3 py-2 text-[10.5px] last:border-0">
@@ -941,7 +915,7 @@ export default function BuilderPage() {
               </div>
             </div>
             <div className="mt-3 space-y-1.5">
-              {[["Type", type?.name ?? "Not selected"], ["Source", sourceMode === "url" ? "Website URL" : sourceMode === "zip" ? "ZIP upload" : "HTML paste"], ["Template", selectedTemplate?.name ?? "Not selected"], ["Build", buildType], ["Ads", adsChoice === "configure" && adsEligible ? `${selectedNetwork.name}${manualAds ? " · manual load" : ""}` : "Skipped"]].map(([k, v]) => (
+              {[["Type", type?.name ?? "Not selected"], ["Source", sourceMode === "url" ? "Website URL" : sourceMode === "zip" ? "ZIP upload" : "HTML paste"], ["Template", selectedTemplate?.name ?? "Not selected"], ["Build", buildType], ["Ads", adsChoice === "configure" ? `AdMob · ${adTestMode ? "test" : "live"}` : "Skipped"]].map(([k, v]) => (
                 <div key={k} className="flex items-center justify-between gap-2 text-[9.5px]">
                   <span className="text-muted">{k}</span>
                   <span className="max-w-[60%] truncate text-right font-medium text-ink">{v}</span>
@@ -973,9 +947,11 @@ export default function BuilderPage() {
 }
 
 function BuildComplete({ appId, name, packageId, template, remaining }: { appId: string; name: string; packageId: string; template: string; remaining: number }) {
-  const { state } = useStore();
+  const { state, checkApkBuild, rebuildApp } = useStore();
+  const { toast } = useToast();
   const app = state.apps.find((a) => a.id === appId);
   const [now, setNow] = useState(Date.now());
+  const [checking, setChecking] = useState(false);
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
@@ -983,26 +959,28 @@ function BuildComplete({ appId, name, packageId, template, remaining }: { appId:
   const started = app?.buildStartedAt ? new Date(app.buildStartedAt).getTime() : now;
   const elapsed = Math.max(0, now - started);
   const estimate = 6 * 60 * 1000;
-  const limit = 30 * 60 * 1000;
-  const left = Math.max(0, limit - elapsed);
-  const ready = app?.buildStatus === "ready";
-  const apkReady = app?.artifactKind === "apk";
-  const progress = ready ? 100 : Math.min(94, 20 + (elapsed / estimate) * 74);
+  const ready = app?.buildStatus === "ready" && (app?.artifactList?.length ?? 0) > 0;
+  const failed = app?.buildStatus === "failed" || app?.buildStatus === "cancelled";
+  const progress = ready ? 100 : failed ? 100 : Math.min(94, 20 + (elapsed / estimate) * 74);
   const fmt = (ms: number) => `${String(Math.floor(ms / 60000)).padStart(2, "0")}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
-  const logs = app?.buildLog ?? ["Project validated", "Preparing the Kaggle Android build…"];
+  const logs = app?.buildLog ?? ["Project validated", "Submitting to the secure build pipeline…"];
 
   return (
     <div className="mx-auto max-w-3xl">
-      <div className="animate-rise rounded-2xl border border-lime/25 bg-[linear-gradient(160deg,rgba(201,246,91,.08),transparent_60%)] p-5 sm:p-7">
+      <div className={cn("animate-rise rounded-2xl border p-5 sm:p-7", ready ? "border-lime/25 bg-[linear-gradient(160deg,rgba(201,246,91,.08),transparent_60%)]" : failed ? "border-rose-500/25 bg-rose-500/[0.04]" : "border-sky-500/25 bg-sky-500/[0.04]")}>
         <div className="flex flex-wrap items-center gap-3">
-          <div className={cn("grid h-12 w-12 place-items-center rounded-2xl", ready ? "bg-lime text-limeink" : "border border-lime/30 bg-lime/10 text-lime")}>
-            {ready ? <Check className="h-6 w-6" /> : <RefreshCw className="h-5 w-5 animate-spin" />}
+          <div className={cn("grid h-12 w-12 place-items-center rounded-2xl", ready ? "bg-lime text-limeink" : failed ? "bg-rose-500/15 text-rose-500" : "border border-sky-500/30 bg-sky-500/10 text-sky-500")}>
+            {ready ? <Check className="h-6 w-6" /> : failed ? <X className="h-6 w-6" /> : <RefreshCw className="h-5 w-5 animate-spin" />}
           </div>
           <div className="min-w-0 flex-1">
-            <h1 className="font-display text-[22px] font-bold tracking-tight text-ink">{apkReady ? "APK is ready." : ready ? "App is ready to install." : "Your app is building."}</h1>
-            <p className="mt-0.5 text-[11px] leading-relaxed text-muted">{apkReady ? "Kaggle Android worker finished. Temporary download is open for 9 minutes." : ready ? "Installable package is ready now. The real APK/AAB builds on the Kaggle Android worker in the background." : "Installable package ready hota hai; APK Kaggle Android worker par background mein build hota hai — page chhod bhi do to queue rukega nahi."}</p>
+            <h1 className="font-display text-[22px] font-bold tracking-tight text-ink">{ready ? "APK is ready." : failed ? "Build did not complete." : "Your app is building."}</h1>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
+              {ready ? "The Android worker finished and the artifact passed validation. The temporary download window is open for 9 minutes."
+                : failed ? (app?.buildError ?? "No verified APK/AAB artifact was produced. Rebuild from the preserved source.")
+                : "The isolated Android worker compiles a real APK/AAB. You can leave this page — the server-side queue continues."}
+            </p>
           </div>
-          <Badge tone={apkReady ? "green" : ready ? "lime" : "sky"}>{apkReady ? "APK · 9 min link" : ready ? "Installable ready" : "Building"}</Badge>
+          <Badge tone={ready ? "green" : failed ? "rose" : "sky"}>{ready ? "APK · 9 min link" : failed ? "Failed" : "Building"}</Badge>
         </div>
 
         <div className="mt-4 rounded-xl border border-line bg-panel p-3">
@@ -1014,24 +992,22 @@ function BuildComplete({ appId, name, packageId, template, remaining }: { appId:
             </div>
             <div className="grid grid-cols-2 gap-2 text-right">
               <div><div className="text-[8px] uppercase tracking-wider text-muted">Elapsed</div><div className="font-mono text-[13px] font-semibold text-ink">{fmt(elapsed)}</div></div>
-              <div><div className="text-[8px] uppercase tracking-wider text-muted">Est. left</div><div className="font-mono text-[13px] font-semibold text-ink">{ready ? "00:00" : fmt(Math.max(0, estimate - elapsed))}</div></div>
+              <div><div className="text-[8px] uppercase tracking-wider text-muted">Est. left</div><div className="font-mono text-[13px] font-semibold text-ink">{ready || failed ? "00:00" : fmt(Math.max(0, estimate - elapsed))}</div></div>
             </div>
           </div>
           <div className="mt-2.5 flex items-center justify-between text-[9px] text-muted">
-            <span>{ready ? (apkReady ? "APK ready" : "Installable package ready") : elapsed > estimate ? "Taking longer than estimate (limit 30:00)" : "Typical build 5–12 minutes"}</span>
-            <span>{ready ? "Complete" : `${Math.round(progress)}%`}</span>
+            <span>{ready ? "APK ready" : failed ? "Stopped" : elapsed > estimate ? "Taking longer than estimate (limit 30:00)" : "Typical build 5–12 minutes"}</span>
+            <span>{ready || failed ? "Complete" : `${Math.round(progress)}%`}</span>
           </div>
-          <Progress value={progress} className="mt-1" tone={ready ? "lime" : elapsed > estimate ? "violet" : "lime"} />
-          <div className="mt-1.5 flex items-center justify-between font-mono text-[8px] text-muted"><span>limit 30:00</span><span>{ready ? "done" : `${fmt(left)} left`}</span></div>
+          <Progress value={progress} className="mt-1" tone={ready ? "lime" : failed ? "rose" : "lime"} />
         </div>
 
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
           {[
-            ["Firebase DB", app ? "Synced" : "—", true],
-            ["Source", app?.sourceId ? "Preserved" : app?.sourceLabel?.startsWith("https") ? "Website URL" : "Queued", !!app?.sourceId || !!app?.sourceLabel],
-            ["Kaggle job", app?.buildJobId ?? "Queued", !!app?.buildJobId],
-            ["Worker", app?.kernelStatus ?? "Queued", !!app?.kernelStatus],
-            ["Engine", "Kaggle", true],
+            ["Source", app?.sourceId ? "Preserved" : app?.sourceLabel?.startsWith("https") ? "Website URL" : "Pending", !!app?.sourceId || !!app?.sourceLabel],
+            ["Build job", app?.buildJobId ?? "Queued", !!app?.buildJobId],
+            ["Artifacts", String(app?.artifactList?.length ?? 0), ready],
+            ["Engine", "Android worker", !!app?.buildJobId],
           ].map(([k, v, ok]) => (
             <div key={k as string} className="rounded-lg border border-line bg-panel2/40 px-2.5 py-1.5">
               <div className="flex items-center gap-1.5"><span className={cn("h-1.5 w-1.5 rounded-full", ok ? "bg-emerald-400" : "bg-amber-400")} /><span className="text-[8px] uppercase tracking-wider text-muted">{k as string}</span></div>
@@ -1043,26 +1019,27 @@ function BuildComplete({ appId, name, packageId, template, remaining }: { appId:
         <div className="mt-3 flex flex-wrap gap-2">
           <Link to={`/app/apps/${appId}/download`} className={buttonClass("lime", "md")}><Download className="h-4 w-4" /> Download / install app</Link>
           <Link to={`/app/apps/${appId}`} className={buttonClass("secondary", "md")}>Project details</Link>
-          {app?.kernelUrl && <a href={app.kernelUrl} target="_blank" rel="noreferrer" className={buttonClass("ghost", "md")}>Kaggle kernel <ArrowRight className="h-3.5 w-3.5" /></a>}
+          {app?.buildJobId && <Button variant="ghost" size="md" loading={checking} onClick={async () => { setChecking(true); const r = await checkApkBuild(appId); setChecking(false); toast(r.message, r.ok ? "success" : "info"); }}><RefreshCw className="h-3.5 w-3.5" /> Check status</Button>}
+          {failed && <Button variant="secondary" size="md" onClick={() => { void rebuildApp(appId); toast("Rebuild dispatched. No app creation credit consumed.", "success"); }}>Rebuild</Button>}
         </div>
       </div>
 
       <Card className="mt-3 overflow-hidden">
         <div className="flex items-center justify-between border-b border-line px-3.5 py-2.5">
           <div className="flex items-center gap-1.5"><Terminal className="h-3.5 w-3.5 text-muted" /><span className="text-[11px] font-semibold text-ink">Live build log</span></div>
-          <span className="flex items-center gap-1.5 font-mono text-[8px] text-muted"><span className={cn("h-1.5 w-1.5 rounded-full", ready ? "bg-emerald-400" : "animate-pulse-dot bg-lime")} />{ready ? "finished" : "live"}</span>
+          <span className="flex items-center gap-1.5 font-mono text-[8px] text-muted"><span className={cn("h-1.5 w-1.5 rounded-full", ready || failed ? "bg-emerald-400" : "animate-pulse-dot bg-lime")} />{ready || failed ? "finished" : "live"}</span>
         </div>
         <div className="max-h-[220px] overflow-auto bg-[#080a0d] p-3 font-mono text-[9px] leading-[1.9]">
           {logs.map((line, i) => (
             <div key={i} className="flex gap-2">
               <span className="shrink-0 text-white/25">{String(i + 1).padStart(2, "0")}</span>
-              <span className={/error|fail|note/i.test(line) ? "text-amber-300" : /ready|complete|pushed|created|generated/i.test(line) ? "text-lime" : "text-[#b9c2b0]"}>{line}</span>
+              <span className={/error|fail/i.test(line) ? "text-amber-300" : /ready|complete|artifact/i.test(line) ? "text-lime" : "text-[#b9c2b0]"}>{line}</span>
             </div>
           ))}
-          {!ready && <div className="mt-1 flex gap-2 text-white/40"><span className="shrink-0">··</span><span>waiting for the next build event…</span></div>}
+          {!ready && !failed && <div className="mt-1 flex gap-2 text-white/40"><span className="shrink-0">··</span><span>waiting for the next build event…</span></div>}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-3.5 py-2">
-          <p className="text-[8.5px] text-muted">Yeh log dikhata hai app kahan se ban rahi hai: Kaggle dataset source, notebook execution, Gradle build aur artifact upload.</p>
+          <p className="text-[8.5px] text-muted">Server-side source preservation, isolated Gradle build and verified artifact upload.</p>
           <span className="font-mono text-[8px] text-muted">{app?.buildMs ? `${(app.buildMs / 1000).toFixed(1)}s total` : "running"}</span>
         </div>
       </Card>

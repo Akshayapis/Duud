@@ -1,0 +1,21 @@
+name: Build engine smoke test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  kaggle-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Verify build-engine credentials and notebook round-trip
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: node scripts/smoke-kaggle.mjs

@@ -26,7 +26,7 @@ ${src ? `<iframe src="${escapeHtml(src)}" title="${escapeHtml(app.name)}" allow=
 <script>
   window.addEventListener("offline", () => document.body.classList.add("offline"));
   window.addEventListener("online", () => document.body.classList.remove("offline"));
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./manifest.webmanifest").catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(() => {});
 </script>
 </body>
 </html>`;
@@ -63,18 +63,26 @@ export async function generateInstallableApp(app: AppRecord): Promise<Installabl
     icons: [{ src: "icon-192.png", sizes: "192x192", type: "image/png" }, { src: "icon-512.png", sizes: "512x512", type: "image/png" }],
   }, null, 2));
   root.file("sw.js", `const C="uapp-${app.id}";self.addEventListener("install",e=>e.waitUntil(caches.open(C).then(c=>c.addAll(["./","./index.html","./manifest.webmanifest"])).then(()=>self.skipWaiting())));self.addEventListener("activate",e=>e.waitUntil(self.clients.claim()));self.addEventListener("fetch",e=>{if(e.request.method==="GET")e.respondWith(fetch(e.request).then(r=>{const c=r.clone();caches.open(C).then(x=>x.put(e.request,c));return r}).catch(()=>caches.match(e.request).then(h=>h||caches.match("./index.html"))))});`);
-  root.file("icon-192.png", await (async () => {
-    const canvas = document.createElement("canvas"); canvas.width = 192; canvas.height = 192;
-    const ctx = canvas.getContext("2d"); if (ctx) { ctx.fillStyle = app.iconColor; ctx.fillRect(0, 0, 192, 192); ctx.fillStyle = "#111605"; ctx.font = "bold 96px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(app.name.slice(0, 1).toUpperCase(), 96, 100); }
+  const icon = (size: number) => {
+    const canvas = document.createElement("canvas"); canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.fillStyle = app.iconColor; ctx.fillRect(0, 0, size, size);
+      ctx.fillStyle = "#111605"; ctx.font = `bold ${Math.round(size * 0.5)}px system-ui`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(app.name.slice(0, 1).toUpperCase(), size / 2, size / 2 + size * 0.02);
+    }
     return canvas.toDataURL("image/png").split(",")[1];
-  })(), { base64: true });
+  };
+  root.file("icon-192.png", icon(192), { base64: true });
+  root.file("icon-512.png", icon(512), { base64: true });
   root.file("package.json", JSON.stringify(pkg, null, 2));
   root.file("README.md", `# ${app.name}\n\nBuilt with U APP.\n\n## Install on a phone\n\n1. Host this folder on any HTTPS static host.\n2. Open it in Chrome on Android.\n3. Tap **Install app**. It opens full-screen with its own icon.\n\n## Use on your own website\n\nHost the folder and link to it, or embed the hosted URL in an \`<iframe>\`.\n\nSource: ${app.sourceLabel}\nPackage: ${app.packageId}\n`);
   root.file("permission.txt", app.permissions.map((p) => `android.permission.${permCode(p)}`).join("\n") + "\n");
   root.file("uapp-project.json", JSON.stringify({ id: app.id, name: app.name, package_id: app.packageId, version: app.version, type: app.type, source: app.sourceLabel, template: app.template, permissions: app.permissions }, null, 2));
   if (app.adsEnabled) {
     const network = NETWORKS.find((n) => n.name === app.adNetwork) ?? NETWORKS[0];
-    const map: Record<string, AdTagFormat> = { "Banner": "banner", "Adaptive Banner": "banner", "MREC": "mrec", "Interstitial": "interstitial", "Rewarded": "rewarded", "Rewarded Interstitial": "rewarded", "App Open": "app-open", "Native": "native" };
+    const map: Record<string, AdTagFormat> = { "Banner": "banner", "Adaptive Banner": "banner", "MREC": "mrec", "Interstitial": "interstitial", "Rewarded": "rewarded", "Rewarded Interstitial": "rewarded-interstitial", "App Open": "app-open" };
     root.file("ads-tags.html", allAdTagsHtml(network.id, app.id, (app.adFormats.length ? app.adFormats : ["Banner"]).map((f) => map[f] ?? "banner")));
   }
   if (isUrl) root.file("embed-snippet.html", `<!-- Host this file to share your app, or paste the iframe on your site -->\n<iframe src="${escapeHtml(app.sourceLabel)}" style="width:100%;height:100vh;border:0" title="${escapeHtml(app.name)}"></iframe>\n`);

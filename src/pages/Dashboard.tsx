@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   Activity,
@@ -34,13 +34,15 @@ import { Link2 as LinkIcon } from "lucide-react";
 import { PageHeader } from "@/components/Shell";
 import { SUPPORT_EMAIL, TEMPLATES } from "@/data/catalog";
 import { formatDate, relativeTime, useStore, type AppRecord } from "@/lib/store";
+import { engineHealth, type EngineHealth } from "@/lib/buildService";
+import { getUpiConfig, hydrateUpiFromServer } from "@/lib/payments";
 import { mmss, useCountdown } from "@/lib/useCountdown";
 import { cn } from "@/utils/cn";
 
 function statusTone(s: AppRecord["buildStatus"]): "green" | "sky" | "violet" | "rose" {
   return s === "ready" ? "green" : s === "queued" ? "sky" : s === "building" ? "violet" : "rose";
 }
-const STATUS_LABEL: Record<AppRecord["buildStatus"], string> = { ready: "Ready", queued: "Queued", building: "Building", failed: "Failed" };
+const STATUS_LABEL: Record<AppRecord["buildStatus"], string> = { ready: "Ready", queued: "Queued", building: "Building", failed: "Failed", cancelled: "Cancelled" };
 
 export function AppIcon({ app, size = 40 }: { app: AppRecord; size?: number }) {
   return (
@@ -69,6 +71,15 @@ function ExpiryPill({ expiresAt }: { expiresAt?: number }) {
 /* ------------------------------------------------------------------ Dashboard */
 
 export function DashboardPage() {
+  const [engine, setEngine] = useState<EngineHealth | null>(null);
+  const [upiReady, setUpiReady] = useState(Boolean(getUpiConfig()));
+  useEffect(() => {
+    let live = true;
+    void engineHealth().then((h) => { if (live) setEngine(h); });
+    void hydrateUpiFromServer().then((cfg) => { if (live) setUpiReady(Boolean(cfg)); });
+    return () => { live = false; };
+  }, []);
+
   const { state, quota } = useStore();
   const user = state.user!;
   const apps = state.apps;
@@ -191,15 +202,15 @@ export function DashboardPage() {
                 <h2 className="text-[12.5px] font-semibold text-ink">Build pipeline</h2>
                 <p className="text-[10px] text-muted">Integration readiness for this environment</p>
               </div>
-              <Badge tone="amber"><TriangleAlert className="h-3 w-3" /> Setup required</Badge>
+              <Badge tone={engine?.buildEnabled ? "green" : "amber"}>{engine?.buildEnabled ? <><CheckCircle2 className="h-3 w-3" /> Engine verified</> : <><TriangleAlert className="h-3 w-3" /> {engine ? "Setup required" : "Checking…"}</>}</Badge>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               {[
-                { label: "Firebase Auth & Realtime DB", note: "Environment config", state: "setup" },
-                { label: "OTP email delivery", note: "Server API required", state: "setup" },
-                { label: "Kaggle Android build engine", note: "Server credentials", state: "setup" },
-                { label: "Temporary artifact storage", note: "Render volume required", state: "setup" },
-                { label: "UPI merchant details", note: "Admin configuration", state: "setup" },
+                { label: "Account & project sync", note: "Identity provider", state: "ok" },
+                { label: "Android build engine", note: engine ? engine.engineStatus : "Checking server…", state: engine?.buildEnabled ? "ok" : "setup" },
+                { label: "Build queue", note: engine ? `${engine.queue} waiting · ${engine.active ? "1 active" : "idle"}` : "—", state: engine?.buildEnabled ? "ok" : "setup" },
+                { label: "Temporary artifact storage", note: engine ? `${engine.downloadTtlSeconds}s download window` : "Persistent server volume", state: engine ? "ok" : "setup" },
+                { label: "UPI merchant details", note: upiReady ? "Server-configured payee" : "Admin configuration required", state: upiReady ? "ok" : "setup" },
                 { label: "Source package export", note: "Available in workspace", state: "ok" },
               ].map((i) => (
                 <div key={i.label} className="flex items-center gap-2 rounded-lg border border-line bg-panel2/40 px-2.5 py-2">
@@ -328,7 +339,7 @@ export function MyAppsPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <Link to={`/app/apps/${app.id}`} className="font-display text-[14px] font-semibold text-ink hover:text-lime">{app.name}</Link>
                     <Badge tone={statusTone(app.buildStatus)}>{STATUS_LABEL[app.buildStatus]}</Badge>
-                    {!app.adsEnabled && <Badge tone="neutral">Ads off</Badge>}{app.buildState === "timeout" && <Badge tone="amber">APK limit · app ready</Badge>}{app.buildState === "installable" && app.buildError && <Badge tone="amber">Installable ready</Badge>}
+                    {!app.adsEnabled && <Badge tone="neutral">Ads off</Badge>}{app.buildState === "timeout" && <Badge tone="amber">Build timeout</Badge>}{app.buildStatus === "failed" && app.buildError && <Badge tone="rose">Build failed</Badge>}
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted">
                     <span className="font-mono">{app.packageId}</span>
@@ -458,17 +469,10 @@ export function AppDetailPage() {
                   {app.buildError}
                 </div>
               )}
-              {app.kernelUrl && (
-                <a href={app.kernelUrl} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg border border-line bg-panel2/50 px-2.5 py-2 text-[9px] font-medium text-ink">
-                  <Layers className="h-3 w-3 text-muted" /> Kaggle build kernel · {app.kernelStatus ?? "queued"}
-                  <ArrowUpRight className="ml-auto h-3 w-3 text-muted" />
-                </a>
-              )}
-              {app.kernelUrl && (
-                <a href={app.kernelUrl} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg border border-lime/25 bg-lime/[0.05] px-2.5 py-2 text-[9.5px] font-semibold text-ink">
-                  <RefreshCw className="h-3 w-3 text-lime" /> Open Kaggle build job #{app.buildJobId ?? app.kernelStatus}
-                  <ArrowUpRight className="ml-auto h-3 w-3 text-muted" />
-                </a>
+              {app.buildJobId && (
+                <div className="flex items-center gap-2 rounded-lg border border-line bg-panel2/50 px-2.5 py-2 text-[9px] font-medium text-ink">
+                  <Layers className="h-3 w-3 text-muted" /> Build job · {app.buildJobId}
+                </div>
               )}
               {(app.buildLog ?? []).length > 0 && (
                 <div className="rounded-lg border border-line bg-[#0a0c10] p-2.5">
@@ -486,7 +490,7 @@ export function AppDetailPage() {
               ))}
               <div className="mt-2 flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 font-mono text-[9px] leading-relaxed text-amber-600 dark:text-amber-400">
                 <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" />
-                APK/AAB is compiled by the Kaggle Android build engine. If the worker is not configured, the project remains a verified installable package with permission.txt — never a fake APK.
+                APK/AAB is compiled by the isolated Android build engine. If the worker is unavailable, the build is reported as failed — never a fake APK.
               </div>
             </div>
           </Card>
@@ -618,7 +622,7 @@ export function DownloadsIndexPage() {
       />
       <div className="mb-4 grid gap-3 sm:grid-cols-3">
         {[
-          { icon: FileArchive, t: "APK / AAB", b: "Compiled by the Kaggle Android worker (Android SDK + Gradle).", status: "Runner setup required" },
+          { icon: FileArchive, t: "APK / AAB", b: "Compiled by the isolated Android worker (Android SDK + Gradle).", status: "Server-side build" },
           { icon: FileCode2, t: "Source ZIP", b: "Generated from your preserved project configuration.", status: "Available" },
           { icon: FileText, t: "permission.txt", b: "Exported from your selected Android permissions.", status: "Available" },
         ].map((x) => (

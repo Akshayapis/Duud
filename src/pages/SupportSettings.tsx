@@ -29,13 +29,12 @@ import {
   User,
   X,
 } from "lucide-react";
-import { Badge, Button, buttonClass, Card, Empty, Field, Input, Modal, Select, Textarea, Toggle, useToast } from "@/components/ui";
+import { Badge, Button, buttonClass, Card, Empty, Field, Input, Modal, Textarea, Toggle, useToast } from "@/components/ui";
 import { PageHeader } from "@/components/Shell";
 import { EMAIL_API, SUPPORT_EMAIL } from "@/data/catalog";
 import { engineHealth, type EngineHealth } from "@/lib/buildService";
-import { getUpiConfig, saveUpiConfig, clearUpiConfig, hydrateUpiFromServer } from "@/lib/payments";
-import { loadManagedAds, saveManagedAd } from "@/lib/ads";
-import { NETWORKS } from "@/data/catalog";
+import { getUpiConfig, hydrateUpiFromServer, saveUpiToServer } from "@/lib/payments";
+import { AD_SDK, TEST_AD_APP_ID } from "@/lib/ads";
 import { isFirebaseReady } from "@/lib/firebase";
 import { formatDate, relativeTime, useStore } from "@/lib/store";
 import { cn } from "@/utils/cn";
@@ -266,9 +265,7 @@ export function SettingsPage() {
   const [upiDraft, setUpiDraft] = useState({ upiId: "", payeeName: "" });
   const [upiMsg, setUpiMsg] = useState<{ ok: boolean; text: string } | null>(null);
   useEffect(() => { let live = true; void hydrateUpiFromServer().then((cfg) => { if (live && cfg) setUpi(cfg); }); return () => { live = false; }; }, []);
-  const [adNetworkId, setAdNetworkId] = useState("admob");
-  const [adAppId, setAdAppId] = useState("");
-  const [adMsg, setAdMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [adminToken, setAdminToken] = useState("");
   const [form, setForm] = useState({ name: user.name, company: user.company ?? "", bio: user.bio ?? "" });
   const [resetOpen, setResetOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
@@ -322,7 +319,7 @@ export function SettingsPage() {
           {tab === "profile" && (
             <Card className="p-4">
               <h2 className="text-[12.5px] font-semibold text-ink">Your profile</h2>
-              <p className="text-[10px] text-muted">Stored in Firebase Realtime Database against your UID.</p>
+              <p className="text-[10px] text-muted">Stored against your verified account.</p>
               <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-line bg-panel2/40 p-3">
                 <div className="grid h-14 w-14 place-items-center rounded-2xl bg-lime font-display text-[20px] font-bold text-limeink">{initials}</div>
                 <div className="min-w-0 flex-1">
@@ -368,7 +365,7 @@ export function SettingsPage() {
           {tab === "notifications" && (
             <Card className="p-4">
               <h2 className="text-[12.5px] font-semibold text-ink">Notification preferences</h2>
-              <p className="text-[10px] text-muted">Firebase Cloud Messaging device registration is required for push delivery.</p>
+              <p className="text-[10px] text-muted">Device registration is required for push delivery.</p>
               <div className="mt-3 divide-y divide-line overflow-hidden rounded-xl border border-line">
                 {[
                   { k: "notifyBuilds" as const, t: "Build completion", d: "Queued, succeeded, failed and artifact expiry alerts.", on: user.notifyBuilds, icon: Smartphone },
@@ -398,10 +395,10 @@ export function SettingsPage() {
                 <h2 className="text-[12.5px] font-semibold text-ink">Authentication</h2>
                 <div className="mt-2 space-y-1.5">
                   {[
-                    ["Provider", user.provider === "google" ? "Google OAuth (Firebase)" : user.provider === "offline" ? "Device-local session" : "Email & password (Firebase)"],
+                    ["Provider", user.provider === "google" ? "Google OAuth" : "Email & password"],
                     ["Email verification", user.emailVerified ? "Verified" : "Not verified"],
                     ["Credential storage", "Passwords never saved in U APP or the Realtime Database"],
-                    ["Session", "Firebase Authentication session · ID token issued to this client"],
+                    ["Session", "Verified identity session · ID token issued to this client"],
                   ].map(([k, v]) => (
                     <div key={k} className="flex items-start justify-between gap-4 border-b border-line/70 py-1.5 text-[10px] last:border-0"><span className="text-muted">{k}</span><span className="max-w-[65%] text-right font-medium text-ink">{v}</span></div>
                   ))}
@@ -423,7 +420,7 @@ export function SettingsPage() {
               <Card className="p-4">
                 <h2 className="text-[12.5px] font-semibold text-ink">Security features</h2>
                 <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
-                  {["Firebase ID token verification", "CSRF & XSS protection", "Rate limiting", "OTP attempt limits", "ZIP slip + archive bomb checks", "Isolated builds", "Upload/download signature checks", "Audit logs without secrets"].map((x) => (
+                  {["ID token verification", "CSRF & XSS protection", "Rate limiting", "ZIP slip + archive bomb checks", "Isolated builds", "Upload/download signature checks", "Audit logs without secrets"].map((x) => (
                     <div key={x} className="flex items-center gap-1.5 text-[9.5px] text-muted"><Check className="h-3 w-3 text-lime" /> {x}</div>
                   ))}
                 </div>
@@ -436,21 +433,21 @@ export function SettingsPage() {
               <Card className="p-4">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
-                    <h2 className="text-[12.5px] font-semibold text-ink">Kaggle Android build engine</h2>
-                    <p className="text-[10px] leading-relaxed text-muted">APK/AAB compilation is performed by a real Kaggle Notebook worker (Android SDK + Gradle). All users share the server-side engine; nobody enters credentials.</p>
+                    <h2 className="text-[12.5px] font-semibold text-ink">Android build engine</h2>
+                    <p className="text-[10px] leading-relaxed text-muted">APK/AAB compilation runs on an isolated server-side worker (Android SDK + Gradle). All users share the engine; nobody enters provider credentials.</p>
                   </div>
-                  <Badge tone={engine?.buildEnabled ? "green" : engine ? "amber" : "neutral"}>{!engine ? "Checking engine…" : engine.buildEnabled ? "Kaggle verified" : "Setup required"}</Badge>
+                  <Badge tone={engine?.buildEnabled ? "green" : engine ? "amber" : "neutral"}>{!engine ? "Checking engine…" : engine.buildEnabled ? "Verified" : "Setup required"}</Badge>
                 </div>
                 <div className="mt-2.5 grid gap-1.5 sm:grid-cols-2">
                   {[
-                    ["Engine", "Kaggle Notebooks"],
-                    ["Credentials", engine?.credentials ?? "checking"],
-                    ["Queue", engine ? `${engine.queue} waiting · ${engine.activeJob ? "1 active" : "idle"}` : "—"],
+                    ["Engine", "Isolated Android worker"],
+                    ["Status", engine?.engineStatus ?? "checking"],
+                    ["Queue", engine ? `${engine.queue} waiting · ${engine.active ? "1 active" : "idle"}` : "—"],
                     ["Execution timeout", engine ? `${engine.timeoutMinutes} minutes` : "30 minutes"],
                     ["Download window", engine ? `${engine.downloadTtlSeconds} seconds` : "540 seconds"],
                     ["User credentials", "Never requested"],
-                    ["Token location", "Render server env only"],
-                    ["Source preservation", "Render disk + inline notebook payload"],
+                    ["Token location", "Server environment only"],
+                    ["Source preservation", "Persistent server volume + signed worker URL"],
                   ].map(([k, v]) => (
                     <div key={k} className="flex items-center justify-between rounded-lg border border-line bg-panel2/40 px-2.5 py-1.5 text-[9.5px]">
                       <span className="text-muted">{k}</span>
@@ -459,17 +456,17 @@ export function SettingsPage() {
                   ))}
                 </div>
                 <div className="mt-2.5 rounded-lg border border-line bg-[#0a0c10] p-2.5">
-                  <div className="mb-1 font-mono text-[8px] uppercase tracking-wider text-white/35">Render → Environment · server only</div>
-                  <pre className="overflow-x-auto font-mono text-[8.5px] leading-[1.9] text-[#c9d1c2]">{`KAGGLE_USERNAME=<your kaggle username>
-KAGGLE_KEY=<current Kaggle API key>
-KAGGLE_TIMEOUT_MINUTES=30
-DOWNLOAD_TTL_SECONDS=540
+                  <div className="mb-1 font-mono text-[8px] uppercase tracking-wider text-white/35">Server environment · never exposed to browsers</div>
+                  <pre className="overflow-x-auto font-mono text-[8.5px] leading-[1.9] text-[#c9d1c2]">{`APP_URL=https://your-domain.example
+FIREBASE_PROJECT_ID=<project id>
+FIREBASE_DATABASE_URL=<realtime database url>
+KAGGLE_USERNAME=<build engine account>
+KAGGLE_KEY=<build engine api key>
 DATA_DIR=/var/uapp-data
 BUILD_UPLOAD_SECRET=<random secret>
 ADMIN_TOKEN=<admin api token>
 UPI_ID=<merchant upi id>
-UPI_PAYEE_NAME=<payee name>
-FIREBASE_PROJECT_ID=dmakenow`}</pre>
+UPI_PAYEE_NAME=<payee name>`}</pre>
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <Button variant="lime" size="sm" onClick={() => void engineHealth().then(setEngine)}><RefreshCw className="h-3.5 w-3.5" /> Re-check engine</Button>
@@ -477,11 +474,11 @@ FIREBASE_PROJECT_ID=dmakenow`}</pre>
                   <span className="text-[8.5px] text-muted">
                     {engine?.buildEnabled
                       ? "The worker installs Android SDK and runs real Gradle builds."
-                      : engine?.message ?? "Set the Kaggle credentials on Render. Login, plans, ads and payments keep working meanwhile."}
+                      : engine?.message ?? "Configure the build engine credentials on the server. Login, plans and payments keep working meanwhile."}
                   </span>
                 </div>
                 <div className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-2.5 text-[8.5px] leading-relaxed text-muted">
-                  Kaggle notebooks need <span className="font-semibold text-ink">Internet enabled</span> (phone-verified Kaggle account) to download the Android SDK. Kaggle is not an always-on server: notebooks run per job, are polled through the official API and can take several minutes. Running notebooks cannot be cancelled via the public API — the queue-level cancel and execution timeout are reported truthfully.
+                  The build worker needs outbound internet access to download the Android SDK. Jobs run per build, are polled through the provider API and can take several minutes. Cancellation stops publication of artifacts; a runner already executing may finish its current step. Timeouts and failures are reported truthfully.
                 </div>
               </Card>
 
@@ -496,45 +493,35 @@ FIREBASE_PROJECT_ID=dmakenow`}</pre>
                 {upi && (
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-lime/25 bg-lime/[0.04] px-2.5 py-2">
                     <div><div className="text-[10px] font-semibold text-ink">{upi.payeeName}</div><div className="font-mono text-[9px] text-muted">{upi.upiId}</div></div>
-                    <Button variant="danger" size="sm" onClick={() => { clearUpiConfig(); setUpi(null); setUpiMsg({ ok: true, text: "Merchant UPI removed." }); }}>Remove</Button>
+
                   </div>
                 )}
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
                   <Input value={upiDraft.upiId} onChange={(e) => setUpiDraft({ ...upiDraft, upiId: e.target.value })} placeholder="business@okhdfcbank" className="h-9 font-mono text-[10.5px]" aria-label="Merchant UPI ID" />
                   <Input value={upiDraft.payeeName} onChange={(e) => setUpiDraft({ ...upiDraft, payeeName: e.target.value })} placeholder="Payee / business name" className="h-9 text-[10.5px]" aria-label="Payee name" />
                 </div>
+                <Input type="password" value={adminToken} onChange={(e) => setAdminToken(e.target.value)} placeholder="Server ADMIN_TOKEN (owner only)" className="mt-2 h-9 font-mono text-[10.5px]" aria-label="Admin token" autoComplete="off" />
                 {upiMsg && <p className={cn("mt-1.5 text-[9px] leading-relaxed", upiMsg.ok ? "text-emerald-500" : "text-rose-500")}>{upiMsg.text}</p>}
-                <Button variant="lime" size="sm" className="mt-2" onClick={() => { const res = saveUpiConfig(upiDraft); setUpiMsg({ ok: res.ok, text: res.message }); if (res.ok) { setUpi(getUpiConfig()); toast("UPI QR payments enabled.", "success"); } }}>Save merchant UPI</Button>
-                <p className="mt-1.5 text-[8px] leading-relaxed text-muted">Deployment ke liye <span className="font-mono">VITE_UAPP_UPI_ID</span> aur <span className="font-mono">VITE_UAPP_UPI_NAME</span> bhi set kar sakte hain. User apna plan yahin QR se pay karega aur UTR submit karega.</p>
+                <Button variant="lime" size="sm" className="mt-2" onClick={async () => { const res = await saveUpiToServer(upiDraft, adminToken); setUpiMsg({ ok: res.ok, text: res.message }); if (res.ok) { setUpi(getUpiConfig()); setAdminToken(""); toast("UPI QR payments enabled.", "success"); } }}>Save merchant UPI to server</Button>
+                <p className="mt-1.5 text-[8px] leading-relaxed text-muted">The payee is stored server-side only. Normal users can never set or override it. Deployment env <span className="font-mono">UPI_ID</span> / <span className="font-mono">UPI_PAYEE_NAME</span> is the fallback.</p>
               </Card>
 
               <Card className="p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <h2 className="text-[12.5px] font-semibold text-ink">Ad network registry · platform App IDs</h2>
-                    <p className="text-[10px] text-muted">Owner sets each network&apos;s App ID once. Builders and apps use it automatically — users are never asked.</p>
+                    <h2 className="text-[12.5px] font-semibold text-ink">Ad integration · Google AdMob</h2>
+                    <p className="text-[10px] text-muted">Builds compile the official GMA Next-Gen SDK {AD_SDK.version} + UMP {AD_SDK.consent}. Other networks are not silently faked.</p>
                   </div>
-                  <Badge tone="lime">{NETWORKS.length} networks</Badge>
+                  <Badge tone="lime">AdMob only</Badge>
                 </div>
-                <div className="mt-2.5 grid gap-1.5 sm:grid-cols-2">
-                  <Select value={adNetworkId} onChange={(e) => { setAdNetworkId(e.target.value); setAdAppId(loadManagedAds()[e.target.value]?.appId ?? ""); }} className="h-9 text-[10.5px]">
-                    {NETWORKS.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
-                  </Select>
-                  <Input value={adAppId || loadManagedAds()[adNetworkId]?.appId || ""} onChange={(e) => setAdAppId(e.target.value)} placeholder="Platform App ID" className="h-9 font-mono text-[10px]" aria-label="Platform network App ID" />
+                <div className="mt-2.5 rounded-lg border border-line bg-panel2/40 px-2.5 py-2 text-[9.5px] leading-relaxed text-muted">
+                  <div><span className="font-semibold text-ink">Test App ID:</span> <span className="font-mono">{TEST_AD_APP_ID}</span></div>
+                  <div className="mt-1">Live builds require the app owner&apos;s real AdMob App ID and per-format ad unit IDs, entered in the builder. Test inventory is available on every plan; live ads require a paid plan.</div>
                 </div>
-                {adMsg && <p className={cn("mt-1.5 text-[9px] leading-relaxed", adMsg.ok ? "text-emerald-500" : "text-rose-500")}>{adMsg.text}</p>}
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <Button size="sm" variant="lime" onClick={() => {
-                    const value = (adAppId || loadManagedAds()[adNetworkId]?.appId || "").trim();
-                    if (value.length < 6) { setAdMsg({ ok: false, text: "Enter the platform App ID for this network." }); return; }
-                    const existing = loadManagedAds()[adNetworkId];
-                    saveManagedAd(adNetworkId, { ...existing, appId: value, label: "Platform configured" });
-                    setAdMsg({ ok: true, text: "Saved. New builds inject this App ID and auto-generate placement IDs." });
-                    toast("Ad network App ID updated.", "success");
-                  }}>Save App ID</Button>
-                  <Link to="/ad-docs" className={buttonClass("secondary", "sm")}>Open ad request console</Link>
+                  <Link to="/ad-docs" className={buttonClass("secondary", "sm")}>Ad SDK reference</Link>
+                  <Link to="/app/create" className={buttonClass("lime", "sm")}>Configure in builder</Link>
                 </div>
-                <p className="mt-1.5 text-[8.5px] leading-relaxed text-muted">Deployment alternative: <span className="font-mono">VITE_UAPP_AD_&lt;NETWORK&gt;_APPID</span>. Live mediation endpoint: <span className="font-mono">VITE_UAPP_ADS_ENDPOINT</span>.</p>
               </Card>
 
               <Card className="p-4">
@@ -545,9 +532,9 @@ FIREBASE_PROJECT_ID=dmakenow`}</pre>
                     { label: "Browser storage", ok: (() => { try { localStorage.setItem("uapp.diag", "1"); localStorage.removeItem("uapp.diag"); return true; } catch { return false; } })(), detail: "Workspace persistence" },
                     { label: "Crypto API", ok: typeof crypto !== "undefined" && !!crypto.subtle, detail: "API key hashing" },
                     { label: "ZIP / package generator", ok: typeof Blob !== "undefined" && typeof URL.createObjectURL === "function", detail: "Installable app packaging" },
-                    { label: "Kaggle build engine", ok: Boolean(engine?.buildEnabled), detail: engine?.buildEnabled ? `Verified · ${engine.credentials}` : engine ? `Setup required · ${engine.credentials}` : "Checking server…" },
+                    { label: "Android build engine", ok: Boolean(engine?.buildEnabled), detail: engine?.buildEnabled ? "Verified" : engine ? `Setup required · ${engine.engineStatus}` : "Checking server…" },
                     { label: "Merchant UPI", ok: !!upi, detail: upi ? upi.upiId : "Owner setup required" },
-                    { label: "Firebase Auth", ok: isFirebaseReady, detail: isFirebaseReady ? "Connected" : "Configuration error" },
+                    { label: "Identity provider", ok: isFirebaseReady, detail: isFirebaseReady ? "Connected" : "Configuration error" },
                   ].map((d) => (
                     <div key={d.label} className="flex items-center gap-2 rounded-lg border border-line bg-panel2/30 px-2.5 py-1.5">
                       <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", d.ok ? "bg-emerald-400" : "bg-amber-400")} />
@@ -561,29 +548,24 @@ FIREBASE_PROJECT_ID=dmakenow`}</pre>
 
               <Card className="p-4">
                 <h2 className="text-[12.5px] font-semibold text-ink">Server environment variables</h2>
-                <p className="text-[10px] text-muted">Set these as deployment secrets. Never commit them to source or expose Firebase Admin secrets to the frontend.</p>
+                <p className="text-[10px] text-muted">Set these as deployment secrets. Never commit them to source or expose admin secrets to the frontend.</p>
                 <div className="mt-2 overflow-hidden rounded-lg border border-line bg-[#0a0c10]">
                   <pre className="overflow-auto p-3 font-mono text-[9px] leading-[1.9] text-[#c9d1c2]">{`APP_URL=https://your-domain.example
-FIREBASE_PROJECT_ID=dmakenow
-FIREBASE_DATABASE_URL=https://dmakenow-default-rtdb.firebaseio.com
+FIREBASE_PROJECT_ID=<project id>
+FIREBASE_DATABASE_URL=<realtime database url>
 
-# Kaggle Android build engine (server-side only)
-KAGGLE_USERNAME=<your kaggle username>
-KAGGLE_KEY=<current Kaggle API key>
+# Build engine (server-side only)
+KAGGLE_USERNAME=<build engine account>
+KAGGLE_KEY=<build engine api key>
 KAGGLE_TIMEOUT_MINUTES=30
 
-# Temporary artifact storage (mount a Render disk)
+# Persistent artifact/source storage
 DATA_DIR=/var/uapp-data
 DOWNLOAD_TTL_SECONDS=540
 BUILD_UPLOAD_SECRET=<random secret>
 ADMIN_TOKEN=<admin api token>
 UPI_ID=<merchant upi id>
-UPI_PAYEE_NAME=<payee name>
-
-# Placements / payments
-VITE_UAPP_ADS_ENDPOINT=<optional live mediation endpoint>
-VITE_UAPP_UPI_ID=<merchant UPI id>
-VITE_UAPP_UPI_NAME=<payee name>`}</pre>
+UPI_PAYEE_NAME=<payee name>`}</pre>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Badge tone="amber"><Lock className="h-3 w-3" /> Secrets never printed</Badge>
@@ -594,7 +576,7 @@ VITE_UAPP_UPI_NAME=<payee name>`}</pre>
               <Card className="p-4">
                 <div className="flex items-start gap-2">
                   <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-                  <p className="text-[10px] leading-relaxed text-muted"><span className="font-semibold text-ink">No admin panel exists in this project.</span> Plan changes, payment approval and runtime settings are prepared as secure server-side contracts for a separate future admin application. Normal users can never change their own plan, quota or payment status.</p>
+                  <p className="text-[10px] leading-relaxed text-muted"><span className="font-semibold text-ink">Admin operations are server-side.</span> Payment approval and plan activation use the protected admin API (<span className="font-mono">/api/admin/payments</span>). Normal users can never change their own plan, quota or payment status.</p>
                 </div>
               </Card>
             </div>

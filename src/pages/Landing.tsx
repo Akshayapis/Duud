@@ -170,7 +170,7 @@ function Hero({ start, openWorkspace }: { start: () => void; openWorkspace: () =
               <span key={t} className="rounded-full border border-line bg-panel/60 px-2.5 py-1 text-[10.5px] font-medium text-ink/80 backdrop-blur">{t}</span>
             ))}
             <span className="inline-flex items-center gap-1.5 rounded-full border border-lime/30 bg-lime/10 px-2.5 py-1 text-[10.5px] font-semibold text-limeink dark:text-lime">
-              <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-lime" /> Kaggle Android engine
+              <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-lime" /> Android build engine
             </span>
           </div>
         </div>
@@ -411,8 +411,7 @@ function ProductSection() {
               <div className="grid h-10 w-10 place-items-center rounded-xl border border-sky-500/25 bg-sky-500/10 text-sky-500"><Terminal className="h-5 w-5" /></div>
               <h3 className="mt-4 font-display text-xl font-semibold text-ink">Android project & advanced builds</h3>
               <p className="mt-2 max-w-md text-[12.5px] leading-relaxed text-muted">
-                Gradle projects, React Native exports, Flutter and custom Gradle shells run through the isolated Kaggle
-                Android build engine with real Gradle logs and real APK/AAB artifacts.
+                Gradle projects, React Native exports, Flutter and custom Gradle shells run through the isolated Android build engine with real Gradle logs and real APK/AAB artifacts.
               </p>
               <div className="mt-4 flex flex-wrap gap-1.5">
                 {["APK", "AAB", "Debug", "Release", "Source ZIP", "permission.txt"].map((x) => (
@@ -422,7 +421,7 @@ function ProductSection() {
             </div>
             <div className="w-full overflow-hidden rounded-xl border border-line bg-[#0b0d11] sm:max-w-[330px]">
               <div className="flex items-center justify-between border-b border-white/8 px-3 py-2">
-                <span className="font-mono text-[8.5px] text-white/40">kaggle/worker · android-build</span>
+                <span className="font-mono text-[8.5px] text-white/40">worker · android-build</span>
                 <span className="flex items-center gap-1 rounded bg-lime/10 px-1.5 py-0.5 text-[7px] font-bold text-lime">RUNNING</span>
               </div>
               <div className="space-y-1.5 p-3 font-mono text-[8.5px] leading-relaxed">
@@ -624,8 +623,8 @@ function BuildSection() {
                 ["✓", "Quota reserved", "credit ledger · atomic", "text-emerald-400"],
                 ["✓", "Source validated", "ZIP slip & archive bomb checks", "text-emerald-400"],
                 ["✓", "Android shell generated", "permissions · splash · WebView", "text-emerald-400"],
-                ["✓", "Gradle build executed", "assembleRelease · signed artifact", "text-emerald-400"],
-                ["→", "Artifact stored temporarily", "Render · expires in 540 seconds", "text-[#c9f65b]"],
+                ["✓", "Gradle build executed", "assembleDebug · bundleRelease", "text-emerald-400"],
+                ["→", "Artifact stored temporarily", "Server · expires in 540 seconds", "text-[#c9f65b]"],
                 ["○", "Secrets rotated & logs purged", "tokens never exposed", "text-white/35"],
               ].map(([mark, label, detail, color]) => (
                 <div key={label} className="flex flex-wrap items-baseline gap-x-3 border-b border-white/5 py-0.5 last:border-0">

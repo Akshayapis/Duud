@@ -24,7 +24,7 @@ import { Badge, Button, buttonClass, Card, CopyButton, Progress, useToast } from
 import { PageHeader } from "@/components/Shell";
 import { PERMISSIONS, TEMPLATES } from "@/data/catalog";
 import { formatDate, useStore } from "@/lib/store";
-import { downloadKaggleArtifact, generateInstallableApp, kaggleBuildStatus, openInstallablePreview, saveInstallable, type PlatformArtifact } from "@/lib/buildService";
+import { downloadArtifact, buildStatus, generateInstallableApp, openInstallablePreview, saveInstallable, type PlatformArtifact } from "@/lib/buildService";
 import { allAdTagsHtml, type AdTagFormat } from "@/lib/ads";
 import { NETWORKS } from "@/data/catalog";
 import { mmss, useCountdown } from "@/lib/useCountdown";
@@ -48,10 +48,10 @@ function BuildTimer({ startedAt, deadline }: { startedAt?: string; deadline: num
         <span className={cn("h-2 w-2 rounded-full", failed ? "bg-rose-500" : "animate-pulse-dot bg-sky-400")} />
         <div className="min-w-0 flex-1">
           <div className="text-[11px] font-semibold text-ink">
-            {failed ? "Build limit reached" : over ? "Build is taking longer than usual" : "Building your APK on the Kaggle Android worker"}
+            {failed ? "Build limit reached" : over ? "Build is taking longer than usual" : "Building your APK on the isolated Android worker"}
           </div>
           <div className="mt-0.5 text-[9.5px] leading-relaxed text-muted">
-            {failed ? "The Kaggle execution limit has passed. No credit is charged. Use Create again to rebuild from preserved source." : `Typical build 5–12 minutes. ${over ? "This build is in overtime and may run up to the 30-minute execution limit." : "You can leave this page — the build continues in the background."}`}
+            {failed ? "The build execution limit has passed. Use Rebuild to compile again from the preserved source." : `Typical build 5–12 minutes. ${over ? "This build is in overtime and may run up to the 30-minute execution limit." : "You can leave this page — the build continues in the background."}`}
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -128,12 +128,12 @@ export default function DownloadPage() {
   };
 
   const grabApk = async (a: PlatformArtifact) => {
-    if (!app?.buildJobId) return toast("No Kaggle build job is linked. Use Create again to build a real APK.", "error");
+    if (!app?.buildJobId) return toast("No build job is linked. Use Rebuild to compile a real APK.", "error");
     setApkBusy(true);
     try {
-      const job = await kaggleBuildStatus(app.buildJobId);
-      await downloadKaggleArtifact(job, a, app.packageId);
-      toast("APK downloaded from the Kaggle build.", "success");
+      const job = await buildStatus(app.buildJobId);
+      await downloadArtifact(job, a, app.packageId);
+      toast("APK downloaded from the verified build.", "success");
     } catch (e) {
       toast((e as Error).message, "error");
     } finally {
@@ -175,7 +175,7 @@ export default function DownloadPage() {
     artifact: {
       project_id: app.id,
       status: app.buildStatus,
-      runner: "kaggle (server-side Android build engine)",
+      runner: "isolated server-side Android build engine",
       expires_at: app.linkExpiresAt ? new Date(app.linkExpiresAt).toISOString() : null,
     },
     generated_at: new Date().toISOString(),
@@ -201,7 +201,7 @@ export default function DownloadPage() {
   const downloadAdTags = () => {
     if (!app.adsEnabled) return toast("Ads were skipped for this project.", "info");
     const network = NETWORKS.find((n) => n.name === app.adNetwork) ?? NETWORKS[0];
-    const map: Record<string, AdTagFormat> = { "Banner": "banner", "Adaptive Banner": "banner", "MREC": "mrec", "Interstitial": "interstitial", "Rewarded": "rewarded", "Rewarded Interstitial": "rewarded", "App Open": "app-open", "Native": "native" };
+    const map: Record<string, AdTagFormat> = { "Banner": "banner", "Adaptive Banner": "banner", "MREC": "mrec", "Interstitial": "interstitial", "Rewarded": "rewarded", "Rewarded Interstitial": "rewarded-interstitial", "App Open": "app-open" };
     const html = allAdTagsHtml(network.id, app.id, (app.adFormats.length ? app.adFormats : ["Banner"]).map((f) => map[f] ?? "banner"));
     saveBlob(new Blob([html], { type: "text/html" }), `${app.packageId}-ads-tags.html`);
     toast("Ad load tags downloaded. Paste them into your HTML, then rebuild.", "success");
@@ -224,7 +224,7 @@ export default function DownloadPage() {
       root.file("permission.txt", permissionText);
       root.file(
         "README.md",
-        `# ${app.name}\n\nPackage: ${app.packageId}\nVersion: ${app.version}\nProject: ${app.id}\nTemplate: ${app.template}\n\n## Artifact status\n\nThe Android APK/AAB is produced by the server-side Kaggle Android build worker. If the worker is not configured, this archive contains the validated project configuration, permission manifest and source notes. It is not an APK and is not presented as one.\n\n## Source\n${app.sourceLabel}\n\n## Timeline\nCreated ${app.createdAt}\nTemporary link expiry ${app.linkExpiresAt ? new Date(app.linkExpiresAt).toISOString() : "—"}\n\n## Build notes\n${app.notes.map((n) => `- ${n}`).join("\n")}\n`
+        `# ${app.name}\n\nPackage: ${app.packageId}\nVersion: ${app.version}\nProject: ${app.id}\nTemplate: ${app.template}\n\n## Artifact status\n\nThe Android APK/AAB is produced by the isolated server-side Android build worker. This project archive contains the validated configuration, permission manifest and source notes. It is not an APK and is not presented as one.\n\n## Source\n${app.sourceLabel}\n\n## Timeline\nCreated ${app.createdAt}\nTemporary link expiry ${app.linkExpiresAt ? new Date(app.linkExpiresAt).toISOString() : "—"}\n\n## Build notes\n${app.notes.map((n) => `- ${n}`).join("\n")}\n`
       );
       root.file(
         "android/app/src/main/AndroidManifest.xml",
@@ -261,7 +261,7 @@ export default function DownloadPage() {
       <Link to={`/app/apps/${app.id}`} className="mb-4 inline-flex items-center gap-1.5 text-[11px] font-medium text-muted hover:text-ink"><ArrowLeft className="h-3.5 w-3.5" /> Project details</Link>
       <PageHeader
         title="Download"
-        subtitle="Your installable app package is generated instantly. APK/AAB builds run on the Kaggle Android worker and appear here automatically. Temporary links expire after nine minutes."
+        subtitle="APK/AAB artifacts are compiled by the isolated Android worker and appear here when verified. Temporary download links expire after nine minutes. A separate web/PWA package is available for browser installation."
         eyebrow={app.id}
         actions={<><Button variant="secondary" size="md" onClick={rebuild}><RefreshCw className="h-4 w-4" /> Create again</Button><Link to="/app/apps" className={buttonClass("lime", "md")}>My apps</Link></>}
       />
@@ -269,10 +269,10 @@ export default function DownloadPage() {
       {(app.buildStatus === "building" || app.buildStatus === "queued") && app.buildDeadline && (
         <BuildTimer startedAt={app.buildStartedAt} deadline={app.buildDeadline} />
       )}
-      {app.buildError && app.artifactKind === "pwa" && (
+      {app.buildError && app.buildStatus === "failed" && (
         <div className="mb-4 flex flex-col gap-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-3.5 sm:flex-row sm:items-center">
           <Timer className="h-4 w-4 shrink-0 text-amber-500" />
-          <p className="flex-1 text-[10px] leading-relaxed text-muted"><span className="font-semibold text-ink">Installable app is ready.</span> {app.buildError}</p>
+          <p className="flex-1 text-[10px] leading-relaxed text-muted"><span className="font-semibold text-ink">Build did not produce an APK.</span> {app.buildError}</p>
           <Button variant="lime" size="sm" onClick={rebuild}><RefreshCw className="h-3.5 w-3.5" /> Retry APK</Button>
         </div>
       )}
@@ -319,8 +319,8 @@ export default function DownloadPage() {
                 {[
                   { name: "Download installable app", meta: "Working PWA package · manifest, icons, offline shell", icon: Smartphone, enabled: true, action: () => void downloadInstallable() },
                   { name: "Open live app", meta: "Launch this app in your browser now", icon: Globe2, enabled: true, action: () => openInstallablePreview(app) },
-                  { name: "Download APK", meta: app.artifactKind === "apk" ? "Real APK built by the Kaggle Android engine" : "Kaggle APK build starts automatically", icon: Smartphone, enabled: (app.artifactList?.length ?? 0) > 0, note: app.buildJobId ? "Check build status below" : "Build queued", action: () => { const first = app.artifactList?.[0]; if (first) void grabApk(first); else void checkApk(); } },
-                  { name: "Download AAB", meta: "Release bundle from the Kaggle build", icon: FileArchive, enabled: (app.artifactList ?? []).some((a) => /\.aab$/i.test(a.name)), note: app.buildJobId ? "Check build status" : "Build queued", action: () => { const aab = app.artifactList?.find((a) => /\.aab$/i.test(a.name)); if (aab) void grabApk(aab); } },
+                  { name: "Download APK", meta: app.artifactKind === "apk" ? "Verified APK from the Android build engine" : "APK build starts automatically", icon: Smartphone, enabled: (app.artifactList?.length ?? 0) > 0, note: app.buildJobId ? "Check build status below" : "Build queued", action: () => { const first = app.artifactList?.[0]; if (first) void grabApk(first); else void checkApk(); } },
+                  { name: "Download AAB", meta: "Release bundle from the Android build (unsigned unless signing is configured)", icon: FileArchive, enabled: (app.artifactList ?? []).some((a) => /\.aab$/i.test(a.name)), note: app.buildJobId ? "Check build status" : "Build queued", action: () => { const aab = app.artifactList?.find((a) => /\.aab$/i.test(a.name)); if (aab) void grabApk(aab); } },
                   { name: "Download project package", meta: "Source shell, config, manifest and icons", icon: FileCode2, enabled: true, action: () => void downloadZip() },
                   { name: "Download permission.txt", meta: `${app.permissions.length} selected permissions`, icon: FileText, enabled: true, action: downloadPermissions },
                   { name: "Download project JSON", meta: "Machine-readable project config", icon: FileText, enabled: true, action: downloadConfig },
@@ -348,19 +348,18 @@ export default function DownloadPage() {
               <div className={cn("mt-3 rounded-xl border p-3", app.buildJobId ? "border-lime/25 bg-lime/[0.04]" : "border-line bg-panel2/40")}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <div className="text-[10.5px] font-semibold text-ink">Installable package & APK build</div>
+                    <div className="text-[10.5px] font-semibold text-ink">APK / AAB build</div>
                     <div className="text-[9px] leading-relaxed text-muted">
-                      {app.buildStatus === "ready" ? (app.artifactKind === "apk" && (app.artifactList?.length ?? 0) > 0 ? "APK is ready. The download window closes 9 minutes after it was generated." : "Installable package is ready. Kaggle APK build continues in the background.") : app.engine === "kaggle" ? "Building on the Kaggle Android worker — usually 5–12 minutes." : "Preparing an installable package."}
+                      {app.buildStatus === "ready" && (app.artifactList?.length ?? 0) > 0 ? "APK/AAB is ready. The download window closes 9 minutes after it was generated." : app.buildStatus === "building" || app.buildStatus === "queued" ? "Building on the isolated Android worker — usually 5–12 minutes." : app.buildStatus === "failed" || app.buildStatus === "cancelled" ? "No verified APK artifact. Rebuild from the preserved source." : "Waiting for a verified build artifact."}
                     </div>
                   </div>
                   <div className="flex gap-1.5">
                     <Button variant="lime" size="sm" loading={pkgBusy} onClick={() => void downloadInstallable()}><DownloadIcon className="h-3.5 w-3.5" /> Installable app</Button>
-                    {app.buildJobId && <Button variant="secondary" size="sm" loading={apkBusy} onClick={() => void checkApk()}><RefreshCw className="h-3.5 w-3.5" /> Check Kaggle build</Button>}
+                    {app.buildJobId && <Button variant="secondary" size="sm" loading={apkBusy} onClick={() => void checkApk()}><RefreshCw className="h-3.5 w-3.5" /> Check build status</Button>}
                     {app.buildJobId && app.buildStatus === "building" && <Button variant="ghost" size="sm" onClick={async () => { const r = await cancelBuild(app.id); toast(r.message, r.ok ? "success" : "info"); }}>Cancel</Button>}
                   </div>
                 </div>
-                {app.kernelUrl && <a href={app.kernelUrl} target="_blank" rel="noreferrer" className="mt-1.5 inline-flex items-center gap-1 text-[8.5px] font-semibold text-ink underline decoration-line underline-offset-2">Open Kaggle kernel · {app.kernelStatus ?? "queued"}</a>}
-                {!app.kernelUrl && <p className="mt-1.5 text-[8.5px] text-muted">APK builds run on the server-side Kaggle Android engine. Kaggle credentials never reach the browser.</p>}
+                <p className="mt-1.5 text-[8.5px] text-muted">APK builds run on the isolated server-side Android engine. Provider credentials never reach the browser.</p>
                 {apkStatus && <p className="mt-2 rounded-lg border border-line bg-panel px-2 py-1.5 font-mono text-[9px] text-muted">{apkStatus}</p>}
                 {apkArtifacts.length > 0 && (
                   <div className="mt-2 space-y-1.5">
@@ -378,7 +377,7 @@ export default function DownloadPage() {
           </Card>
 
           <Card className="overflow-hidden">
-            <div className="flex items-center justify-between border-b border-line px-4 py-3"><h2 className="text-[12.5px] font-semibold text-ink">Build metadata</h2><span className="inline-flex items-center gap-1.5 text-[8.5px] text-muted"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Firebase synced</span></div>
+            <div className="flex items-center justify-between border-b border-line px-4 py-3"><h2 className="text-[12.5px] font-semibold text-ink">Build metadata</h2><span className="inline-flex items-center gap-1.5 text-[8.5px] text-muted"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Account synced</span></div>
             <div className="grid gap-x-6 gap-y-0 p-4 sm:grid-cols-2">
               {[
                 ["Project ID", app.id],
@@ -442,7 +441,7 @@ export default function DownloadPage() {
                 { icon: Clock, t: "9 minutes only", d: "Signed link expires and the artifact is deleted." },
                 { icon: RefreshCw, t: "Create again", d: "Rebuild from preserved source for a new window." },
                 { icon: Zap, t: "0 credits to rebuild", d: "Only a brand-new app consumes a creation credit." },
-                { icon: ShieldCheck, t: "Never in Firebase", d: "APKs and source archives stay out of the database." },
+                { icon: ShieldCheck, t: "Never in the database", d: "APKs and source archives stay out of the account database." },
               ].map((x) => (
                 <div key={x.t} className="flex items-start gap-2">
                   <x.icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
@@ -468,7 +467,7 @@ export default function DownloadPage() {
 
           <div className="flex items-start gap-2 rounded-xl border border-line bg-panel/50 p-3">
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
-            <p className="text-[9px] leading-relaxed text-muted">Render&apos;s ephemeral filesystem can restart and lose artifacts. Missing files are handled gracefully with an expiry message — never a broken claim of availability.</p>
+            <p className="text-[9px] leading-relaxed text-muted">Artifact storage is temporary. Missing or expired files are handled gracefully with an expiry message — never a broken claim of availability.</p>
           </div>
         </div>
       </div>

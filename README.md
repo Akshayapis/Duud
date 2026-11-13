@@ -1,115 +1,130 @@
 # U APP — Build Anything. Launch Everywhere.
 
-Premium app-creation platform: React 19 + Vite + Tailwind on the front end, a Render-hosted
-Node server, Firebase Authentication / Realtime Database, and a **Kaggle-powered Android build engine**
-that compiles real APK/AAB files.
+Premium app-creation platform: React 19 + Vite + Tailwind on the front end, a Node server,
+Firebase Authentication / Realtime Database, and an **isolated Android build engine** that
+compiles real APK/AAB files.
 
 ## What is implemented
 
 - Premium landing site, dark/light themes, animated product demos, 54 UI templates.
 - Firebase Authentication (Google + Email/Password), password reset, real email verification.
-- Free plan: 3 app creation credits per calendar month, server-checked; paid plans; fail-safe credits;
-  rebuilds never consume a credit.
-- Manual UPI payments with a real UPI-intent QR, UTR submission, PENDING → approved history.
+- Free plan: 3 app creation credits per calendar month, **server-checked**; paid plans; fail-closed
+  quota; rebuilds of the same app never consume a new credit.
+- Manual UPI payments with a real UPI-intent QR, UTR submission, server-side pending → approved
+  history. The merchant payee is configured **only** on the server (admin API / deployment env);
+  browsers can never set or override it.
 - Full builder: 12 project types, website URL-only flow, HTML paste, real ZIP analysis with
   supported / partial / unsupported classification, permissions + `permission.txt`, 54 templates.
-- Ad networks: managed platform App IDs (users never type an App ID), supported formats per network,
-  HTML ad load tags (banner div + button-triggered interstitial/rewarded), load-request console.
+- Ads: **Google AdMob only**, compiled with the official GMA Next-Gen SDK `1.6.0` + UMP `4.0.0`.
+  Test inventory is available on every plan; live ads require the owner's real AdMob App ID and
+  per-format ad unit IDs plus a paid plan. Other networks are rejected truthfully, never faked.
 - Developer portal: REST endpoint contracts, Python/PHP/JS samples, SHA-256 hashed API keys.
 - Support centre, activity log, settings, downloads with a live build terminal.
-- **Kaggle Android build engine** — real notebook execution, queue, actual logs, real artifacts.
+- White-label UI: provider names and credentials are not exposed to end users.
 
-## Kaggle build engine
+## Build engine
 
-`server/kaggle.mjs` uses the **current Kaggle API** (`https://api.kaggle.com/v1/kernels.KernelsApiService/…`)
-with HTTP Basic auth. It calls `SaveKernel` to save and run the worker notebook, `GetKernelSessionStatus`
-to poll real execution state, and `ListKernelSessionOutput` + `DownloadKernelOutput` to retrieve
-artifacts. Verified live against the platform account (`SaveKernel` 200, status `RUNNING`).
+`server/kaggle.mjs` uses the current Kaggle kernel-session API
+(`https://www.kaggle.com/api/v1/kernels.KernelsApiService/…`) with HTTP Basic auth. It calls
+`SaveKernel` to save and run a private worker notebook, `GetKernelSessionStatus` to poll real
+execution state, and `ListKernelSessionOutput` to retrieve artifacts. Output version labels are
+`v<N>` (bare numbers return 404).
 
-The generated source ZIP is embedded in the notebook's `JOB` payload cell (limit 12 MB) and also kept
-on Render disk, so Create Again works without a re-upload and without a Kaggle dataset dependency.
+Source ZIPs are streamed to persistent server storage and fetched by the worker over a short-lived,
+per-job signed URL. Notebook payload limits never truncate a project. Artifacts are uploaded back
+over a per-job HMAC token, verified (ZIP magic + SHA-256), and deleted after the download TTL.
 
-`kaggle/worker/worker.ipynb` is the actual worker:
+`kaggle/worker/worker.py` is the single source of truth for the worker. `npm run sync:worker`
+(regenerated automatically before `npm run build`) embeds it into `kaggle/worker/worker.ipynb`
+with a `UAPP_JOB_PAYLOAD` marker cell. The server injects the job payload and Java/XML templates
+into that cell before pushing.
 
-1. Reads `job.json` from the attached dataset.
-2. Verifies internet access (required for Android SDK downloads).
-3. Installs JDK 17, Android command-line tools, platform 34, build-tools and Gradle 8.9.
-4. Uses the uploaded project if it contains a Gradle project, otherwise generates a real Android
-   WebView project for the website URL / HTML source.
-5. Runs `assembleDebug` and `bundleRelease`.
-6. Uploads the APK/AAB and real `build.log` back to Render using a per-job upload token; outputs also
-   remain in the Kaggle notebook output.
+Worker steps:
 
-`server/index.mjs` provides the queue and API:
+1. Download and safely extract the preserved source (ZIP-slip / symlink / bomb checks).
+2. Use an uploaded Gradle project if present; otherwise generate a real Android WebView shell
+   (AGP 8.13.0, Gradle 8.13, compileSdk/targetSdk 36, minSdk 24, JDK 17).
+3. Inject the AdMob Next-Gen runtime + UMP consent when ads are configured.
+4. Run `assembleDebug` and `bundleRelease` (AAB is unsigned unless signing is configured).
+5. Upload the APK/AAB and real `build.log` back to the server; outputs also remain in the notebook.
+
+### Server API
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/health` | Kaggle credentials verified, queue length, active job, timeouts |
-| `POST /api/source` | Preserve the original ZIP (Render disk + Kaggle dataset) |
-| `POST /api/build` | Firebase ID-token verification, quota check, create a unique build job |
-| `GET /api/build/:jobId/status` | Real Kaggle status, real logs, artifacts, 9-minute expiry |
+| `GET /api/health` | White-label engine status, queue length, active job, timeouts |
+| `GET /api/account` | Server-authoritative plan + quota for the signed-in user |
+| `POST /api/source` | Streamed ZIP upload (150 MB default), ownership recorded |
+| `POST /api/build` | ID-token verification, email verification, fail-closed quota, queue a job |
+| `GET /api/build/:jobId/status` | Real status, logs, artifacts, expiry |
+| `GET /api/build/:jobId/source?token=…` | Worker-only signed source download |
 | `GET /api/build/:jobId/artifact/:name` | Owner-only streamed APK/AAB while the link is valid |
-| `POST /api/build/:jobId/cancel` | Queue cancellation; running Kaggle kernels cannot be cancelled via the public API |
-| POST-ish `/api/build/:jobId/upload` | Worker → Render artifact upload (HMAC job token) |
+| `POST /api/build/:jobId/upload` | Worker → server artifact upload (HMAC job token) |
+| `POST /api/build/:jobId/cancel` | Cancel queued/running job; running runner may finish its current step but no artifact is published |
+| `POST /api/payments` | Submit a UPI payment request (pending) |
+| `GET /api/payments` | Signed-in user's payment history |
+| `GET /api/admin/payments` | Admin: list payment requests |
+| `POST /api/admin/payments/:id/approve` | Admin: activate plan after UTR verification |
+| `POST /api/admin/payments/:id/reject` | Admin: reject a payment request |
+| `GET /api/settings/public` | Public merchant UPI payee (read-only) |
+| `PUT /api/settings/payment` | Admin: set merchant UPI payee |
 
-Queue rules: one active Kaggle worker, duplicate-request prevention per app, persisted queue on disk,
-execution timeout (`KAGGLE_TIMEOUT_MINUTES`, default 30), real error reporting, and truthful
-limitations. No fake status, logs or APKs are produced. When the engine is unavailable, the app is
-still delivered as a genuinely working installable package (PWA shell, icons, offline cache) and the
-UI states exactly why the APK is missing.
+Queue rules: one active worker, duplicate-request prevention per app, persisted queue on disk,
+execution timeout (`KAGGLE_TIMEOUT_MINUTES`, default 30), restart re-poll of running jobs, real
+error reporting. No fake status, logs, APKs or "installable fallback success" is produced. A
+separate web/PWA package is available for browser installation and is never presented as an APK.
 
-### Kaggle prerequisites (real platform limitations)
+### Build engine prerequisites
 
-- Kaggle notebooks must have **Internet enabled** to download Android SDK/Gradle. Kaggle requires
-  phone verification for internet access.
-- Kaggle is not an always-on server. Jobs are queued, pushed through the API, and polled.
-- Running notebooks cannot be cancelled by the public API; queued jobs can be cancelled.
-- Android builds take several minutes. The browser stays usable meanwhile.
+- The worker account must allow **internet-enabled** notebooks (phone verification) to download
+  the Android SDK / Gradle.
+- The engine is not an always-on server. Jobs run per build, are polled through the API, and can
+  take several minutes.
+- Cancellation stops artifact publication; a runner already executing may finish its current step.
+- Set `APP_URL` (or `RENDER_EXTERNAL_URL`) so the worker can fetch source and upload artifacts
+  safely. Authenticated builds fail closed if no public server URL is configured.
 
-## Render deployment (no file editing)
+## Deployment (Render Docker)
 
 1. Deploy this repository as a Docker service (Blueprint uses `render.yaml`).
-2. Set environment variables:
-   - `KAGGLE_USERNAME` / `KAGGLE_KEY` — optional; platform defaults already work.
-   - `APP_URL` — the Render service URL (used for the worker's artifact upload callback).
-   - `ADMIN_TOKEN` — token for the future admin panel's payment/UPI API.
-   - `UPI_ID` / `UPI_PAYEE_NAME` — merchant UPI for the payment QR.
-   - Optional: `KAGGLE_TIMEOUT_MINUTES`, `DOWNLOAD_TTL_SECONDS`, `BUILD_UPLOAD_SECRET`.
-3. The server writes to `DATA_DIR`. Mount a Render disk at `/var/uapp-data` for restart-safe sources;
-   otherwise it automatically falls back to `/tmp/uapp-data`. Artifacts are always deleted nine minutes
-   after a successful build.
-
-### Admin-ready payment settings
-
-`PUT /api/settings/payment` with header `x-admin-token: <ADMIN_TOKEN>` and body
-`{ "upiId": "business@okhdfcbank", "payeeName": "Your Business" }` configures the QR without editing files.
-`GET /api/settings/public` returns the active merchant UPI to the payment page.
-4. Firebase Authentication requires the Render hostname in Firebase Console → Authentication →
-   Settings → Authorized domains. Enable Google and Email/Password providers.
+2. Mount a persistent disk at `/var/uapp-data` (`DATA_DIR`). Sources, jobs, payments and plan
+   overrides survive restarts. Artifacts are deleted after `DOWNLOAD_TTL_SECONDS` (default 540).
+3. Set server environment variables (see `.env.example`):
+   - `APP_URL`, `DATA_DIR`, `REQUIRE_AUTH=true`
+   - `FIREBASE_PROJECT_ID`, `FIREBASE_DATABASE_URL`
+   - `KAGGLE_USERNAME`, `KAGGLE_KEY`, `KAGGLE_TIMEOUT_MINUTES`, `KAGGLE_WORKER_SLUG`
+   - `BUILD_UPLOAD_SECRET`, `ADMIN_TOKEN` (≥ 24 chars)
+   - `UPI_ID`, `UPI_PAYEE_NAME` (optional fallback; admin API can override)
+   - `FIREBASE_SERVICE_ACCOUNT_JSON` is optional; ID-token verification works with the project ID
+     alone. It is only needed for future admin SDK writes.
+4. In Firebase Console → Authentication → Settings → Authorized domains, add the deployment
+   hostname. Enable Google and Email/Password providers. Publish `firebase.rules.json` (plan/quota
+   fields are server/admin-only; browsers cannot write them).
 
 Credentials are read only by the server. They are never bundled into the frontend, returned by the
 API, or written to logs.
-
-## Runtime versions
-
-- Node.js **24.12+** (required by the Firebase 13 packages; Vite 7 also supports it).
-- The Dockerfile pins `node:24-alpine` for both build and runtime, and installs
-  production dependencies in the runtime stage so `server/index.mjs` can resolve
-  `adm-zip` and other packages.
 
 ## Local commands
 
 ```bash
 npm install
-npm run dev          # Vite front end
-npm start            # build server (serves dist/ too)
-npm run build        # production bundle
+npm run sync:worker   # regenerate worker.ipynb from worker.py
+npm run dev           # Vite front end (proxies /api to 127.0.0.1:8080)
+npm run dev:server    # build server on :8080
+npm run build         # production bundle (runs sync:worker first)
+npm start             # serve dist/ + API
+npm test              # node:test suite
+npm run check         # tsc + build + tests
 ```
 
 ## Directory notes
 
-- `server/index.mjs` — queue, auth, quota, artifacts and static hosting.
-- `server/kaggle.mjs` — Kaggle API client.
-- `kaggle/worker/worker.ipynb` — real build worker notebook.
+- `server/index.mjs` — queue, auth, quota, payments, artifacts and static hosting.
+- `server/kaggle.mjs` — build-engine API client.
+- `kaggle/worker/worker.py` — worker source of truth.
+- `kaggle/worker/worker.ipynb` — generated notebook (do not hand-edit).
+- `kaggle/worker/templates/` — Android shell / ads runtime templates embedded into each job.
+- `scripts/sync-worker.mjs` — notebook generator.
 - `firebase.rules.json` — Realtime Database rules.
 - `Dockerfile` / `render.yaml` — deployment.
+- `tests/` — server, API-client and worker shape tests.
