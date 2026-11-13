@@ -14,7 +14,8 @@ import {
   PLANS,
   type Plan,
 } from "@/data/catalog";
-import { BUILD_TIMEOUT_MS, artifactsFromJob, cancelKaggleBuild, engineHealth, generateInstallableApp, kaggleBuildStatus, queueKaggleBuild, type PlatformArtifact } from "@/lib/buildService";
+import { BUILD_TIMEOUT_MS, artifactsFromJob, cancelBuild as cancelServerBuild, buildStatus, queueBuild, type PlatformArtifact } from "@/lib/buildService";
+import { fetchPaymentRequests, submitPaymentRequest } from "@/lib/payments";
 import {
   emailLogin,
   emailRegister,
@@ -36,7 +37,7 @@ export type User = {
   uid: string;
   name: string;
   email: string;
-  provider: "password" | "google" | "offline";
+  provider: "password" | "google";
   emailVerified: boolean;
   createdAt: string;
   planId: string;
@@ -63,8 +64,11 @@ export type AppRecord = {
   adNetwork?: string;
   adFormats: string[];
   adTiming?: string;
+  adTestMode?: boolean;
+  adAppId?: string;
+  adUnits?: Record<string, string>;
   version: string;
-  buildStatus: "queued" | "building" | "ready" | "failed";
+  buildStatus: "queued" | "building" | "ready" | "failed" | "cancelled";
   buildType: string;
   createdAt: string;
   buildStartedAt?: string;
@@ -80,7 +84,7 @@ export type AppRecord = {
   kernelUrl?: string;
   kernelStatus?: string;
   sourceId?: string;
-  engine?: "kaggle" | "installable" | "none";
+  engine?: "server" | "none";
   queuePosition?: number;
   buildLog?: string[];
   artifactReady?: boolean;
@@ -88,7 +92,7 @@ export type AppRecord = {
   buildMs?: number;
   artifactList?: PlatformArtifact[];
   buildDeadline?: number;
-  buildState?: "queued" | "pushing" | "building" | "apk-ready" | "timeout" | "installable" | "apk-failed";
+  buildState?: "queued" | "pushing" | "building" | "apk-ready" | "timeout" | "apk-failed" | "cancelled";
   buildError?: string;
   shareUrl?: string;
 };
@@ -181,7 +185,7 @@ type State = {
   apiLogs: ApiLog[];
   seededDemo: boolean;
   authReady: boolean;
-  authMode: "firebase" | "offline" | "none";
+  authMode: "firebase" | "none";
   authNotice: string;
 };
 
@@ -212,10 +216,11 @@ function loadState(): State {
     if (raw) {
       const parsed = { ...emptyState, ...(JSON.parse(raw) as State) } as State;
       parsed.apps = (parsed.apps ?? []).map((a) => {
-        if (a.buildStatus === "failed") {
-          return { ...a, buildStatus: "ready", artifactKind: "pwa", artifactReady: true, buildState: "installable", linkExpiresAt: Date.now() + DOWNLOAD_TTL_SECONDS * 1000, buildLog: ["Installable app package prepared", "Recovered automatically — app is ready to install", "Retry the APK from the download page"] };
+        // A "ready" app must have real artifacts. Legacy fallback records that
+        // claimed success without an APK are corrected to a truthful state.
+        if (a.buildStatus === "ready" && a.artifactKind !== "apk") {
+          return { ...a, buildStatus: "failed", artifactReady: false, buildState: "apk-failed", buildError: a.buildError || "No verified APK artifact exists for this project. Rebuild to produce one." };
         }
-        if (a.buildStatus === "ready" && !a.artifactKind) return { ...a, artifactKind: "pwa", artifactReady: true };
         return a;
       });
       return parsed;
@@ -348,7 +353,6 @@ type StoreValue = {
   login: (data: { email: string; password: string }) => Promise<AuthResult>;
   googleLogin: () => Promise<AuthResult>;
   logout: () => Promise<void>;
-  continueOffline: (data: { name: string; email: string }) => void;
   resendVerification: () => Promise<AuthResult>;
   refreshVerification: () => Promise<AuthResult>;
   resetPassword: (email: string) => Promise<AuthResult>;
@@ -365,7 +369,7 @@ type StoreValue = {
   checkApkBuild: (id: string) => Promise<{ ok: boolean; message: string }>;
   updateApp: (id: string, patch: Partial<AppRecord>) => void;
   deleteApp: (id: string) => void;
-  submitPayment: (data: { planId: string; method: string; utr: string }) => { ok: boolean; orderId: string; message?: string };
+  submitPayment: (data: { planId: string; method: string; utr: string }) => Promise<{ ok: boolean; orderId: string; message?: string }>;
   createApiKey: (label: string) => Promise<{ ok: boolean; secret?: string; message?: string }>;
   revokeApiKey: (id: string) => void;
   pushActivity: (a: Omit<Activity, "id" | "at">) => void;
@@ -410,6 +414,34 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [theme]);
 
+  useEffect(() => {
+    const uid = state.user?.uid;
+    if (!uid) return;
+    let live = true;
+    void fetchPaymentRequests().then((list) => {
+      if (!live || !list) return;
+      setState((s) => ({
+        ...s,
+        payments: list.map((p) => ({
+          id: p.id, orderId: p.orderId, planId: p.planId, planName: planById(p.planId).name,
+          amount: planById(p.planId).price, method: p.method,
+          utr: p.utr.length > 6 ? `${p.utr.slice(0, 4)}••••${p.utr.slice(-4)}` : p.utr,
+          createdAt: p.createdAt, status: p.status, approvedAt: p.approvedAt, rejectionReason: p.rejectionReason,
+        })),
+      }));
+    });
+    void (async () => {
+      const token = await import("@/lib/firebase").then((m) => m.authToken());
+      const res = await fetch("/api/account", { headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) } }).catch(() => null);
+      if (!live || !res?.ok) return;
+      const data = (await res.json()) as { plan?: { planId?: string; planActivatedAt?: string; planExpiresAt?: string } };
+      if (data.plan?.planId) {
+        setState((s) => s.user ? { ...s, user: { ...s.user, planId: data.plan!.planId!, planActivatedAt: data.plan!.planActivatedAt, planExpiresAt: data.plan!.planExpiresAt } } : s);
+      }
+    })();
+    return () => { live = false; };
+  }, [state.user?.uid]);
+
   const pushActivity = useCallback((a: Omit<Activity, "id" | "at">) => {
     setState((s) => ({
       ...s,
@@ -422,7 +454,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const unsubscribe = watchAuth(async (identity) => {
       if (!active) return;
       if (!identity) {
-        setState((s) => (s.authMode === "offline" && s.user ? s : { ...s, user: null, authReady: true, authMode: s.authMode === "offline" ? "offline" : "none" }));
+        setState((s) => ({ ...s, user: null, authReady: true, authMode: "none" }));
         return;
       }
       const remote = await readProfile(identity.uid);
@@ -459,11 +491,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           authReady: true,
           authMode: "firebase",
           authNotice: "",
-          activities: sameUser ? s.activities : [{ id: makeId("ACT"), title: "Signed in", detail: "Firebase authentication session established", at: new Date().toISOString(), kind: "auth" }],
+          activities: sameUser ? s.activities : [{ id: makeId("ACT"), title: "Signed in", detail: "Secure sign-in session established", at: new Date().toISOString(), kind: "auth" }],
           notifications: sameUser ? s.notifications : [],
         };
       });
-      if (!remote?.uid) {
+      if (!remote?.createdAt) {
         void writeProfile(identity.uid, {
           uid: identity.uid,
           name: identity.name,
@@ -471,7 +503,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           provider: identity.provider,
           emailVerified: identity.emailVerified,
           createdAt: identity.createdAt,
-          planId: "free",
         });
       }
     });
@@ -506,7 +537,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         authMode: "firebase",
         authNotice: "",
         activities: [
-          { id: makeId("ACT"), title: identity.provider === "google" ? "Google login" : "Login", detail: "Firebase Authentication session verified", at: new Date().toISOString(), kind: "auth" },
+          { id: makeId("ACT"), title: identity.provider === "google" ? "Google login" : "Login", detail: "Sign-in session verified", at: new Date().toISOString(), kind: "auth" },
           ...s.activities,
         ],
       };
@@ -525,7 +556,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const register = useCallback(async (data: { name: string; email: string; password: string }): Promise<AuthResult> => {
     if (data.name.trim().length < 2) return { ok: false, message: "Enter your full name.", kind: "credential" };
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email.trim())) return { ok: false, message: "Enter a valid email address.", kind: "credential" };
-    if (data.password.length < 8) return { ok: false, message: "Firebase requires at least 8 characters for a password.", kind: "credential" };
+    if (data.password.length < 8) return { ok: false, message: "The identity provider requires at least 8 characters for a password.", kind: "credential" };
     try {
       const identity = await emailRegister(data.name.trim(), data.email.trim(), data.password);
       finishFirebaseAuth(identity);
@@ -576,38 +607,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
-  const continueOffline = useCallback((data: { name: string; email: string }) => {
-    const uid = makeUid();
-    const user: User = {
-      uid,
-      name: data.name.trim() || "Builder",
-      email: data.email.trim().toLowerCase(),
-      provider: "offline",
-      emailVerified: false,
-      createdAt: new Date().toISOString(),
-      planId: "free",
-      notifyBuilds: true,
-      notifyPayments: true,
-      notifyProduct: false,
-    };
-    setState((s) => ({
-      ...s,
-      user,
-      apps: [],
-      payments: [],
-      support: [],
-      apiKeys: [],
-      activities: [{ id: makeId("ACT"), title: "Device session opened", detail: "Firebase unreachable — workspace stored on this device only", at: new Date().toISOString(), kind: "auth" }],
-      authReady: true,
-      authMode: "offline",
-      authNotice: "Firebase authentication is unreachable from this deployment. This workspace is stored on this device only until the Firebase domain is authorised.",
-    }));
-  }, []);
-
   const resendVerification = useCallback(async (): Promise<AuthResult> => {
     try {
       await resendVerificationEmail();
-      return { ok: true, message: "A fresh verification email was sent by Firebase." };
+      return { ok: true, message: "A fresh verification email was sent by the identity provider." };
     } catch (error) {
       return { ok: false, message: firebaseErrorMessage(error).message };
     }
@@ -620,7 +623,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setState((s) => ({
         ...s,
         user: s.user ? { ...s.user, emailVerified: true } : s.user,
-        activities: [{ id: makeId("ACT"), title: "Email verified", detail: "Firebase email verification confirmed", at: new Date().toISOString(), kind: "auth" }, ...s.activities],
+        activities: [{ id: makeId("ACT"), title: "Email verified", detail: "Email verification confirmed", at: new Date().toISOString(), kind: "auth" }, ...s.activities],
       }));
       if (state.user) void writeProfile(state.user.uid, { emailVerified: true });
       return { ok: true, message: "Email verified. Your workspace is unlocked." };
@@ -632,7 +635,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const resetPassword = useCallback(async (email: string): Promise<AuthResult> => {
     try {
       await passwordReset(email.trim());
-      return { ok: true, message: "Password reset email sent by Firebase. Check your inbox and spam folder." };
+      return { ok: true, message: "Password reset email sent by the identity provider. Check your inbox and spam folder." };
     } catch (error) {
       const mapped = firebaseErrorMessage(error);
       return { ok: false, message: mapped.message };
@@ -702,31 +705,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return { ok: true, appId: id };
   }, [state]);
 
-  const installableFallback = useCallback(async (id: string, note: string, startedAt: number) => {
-    const app = stateRef.current.apps.find((a) => a.id === id);
-    if (!app) return;
-    try {
-      const pkg = await generateInstallableApp(app);
-      setState((s) => ({
-        ...s,
-        apps: s.apps.map((a) => a.id === id ? {
-          ...a,
-          buildStatus: "ready",
-          artifactKind: "pwa",
-          artifactReady: true,
-          buildState: "installable",
-          engine: "installable",
-          artifactMb: pkg.sizeMb,
-          buildMs: Date.now() - startedAt,
-          buildError: note,
-          linkExpiresAt: Date.now() + DOWNLOAD_TTL_SECONDS * 1000,
-          notes: [...a.notes, "Installable app package generated in-browser", note],
-          buildLog: [...(a.buildLog ?? []), "Installable package ready", note],
-        } : a),
-      }));
-    } catch (e) {
-      setState((s) => ({ ...s, apps: s.apps.map((a) => (a.id === id ? { ...a, buildStatus: "ready", artifactReady: true, artifactKind: "pwa", buildState: "installable", engine: "installable", buildError: `${note} Package fallback note: ${(e as Error).message}` } : a)) }));
-    }
+  const applyJob = useCallback((id: string, job: import("@/lib/buildService").BuildJob, startedAt: number) => {
+    const artifacts = artifactsFromJob(job);
+    const terminal = ["ready", "failed", "timeout", "expired", "cancelled"].includes(job.status);
+    const ready = job.status === "ready" && artifacts.length > 0;
+    setState((s) => ({
+      ...s,
+      apps: s.apps.map((a) => a.id === id ? {
+        ...a,
+        buildJobId: job.id,
+        buildStatus: ready ? "ready" : job.status === "cancelled" ? "cancelled" : terminal ? "failed" : job.status === "queued" ? "queued" : "building",
+        buildState: ready ? "apk-ready" : job.status === "cancelled" ? "cancelled" : terminal ? (job.status === "timeout" ? "timeout" : "apk-failed") : "building",
+        engine: "server",
+        artifactKind: ready ? "apk" : a.artifactKind,
+        artifactReady: ready,
+        artifactList: artifacts.length ? artifacts : terminal ? [] : a.artifactList,
+        artifactMb: ready ? Math.round(((artifacts.find((x) => /\.apk$/i.test(x.name)) ?? artifacts[0]).size_in_bytes / 1024 / 1024) * 10) / 10 : a.artifactMb,
+        queuePosition: job.queuePosition,
+        linkExpiresAt: job.expiresAt ?? a.linkExpiresAt,
+        buildMs: terminal ? Date.now() - startedAt : a.buildMs,
+        buildError: job.error ?? (terminal && !ready ? `Build ${job.status}.` : undefined),
+        buildLog: job.logs?.length ? job.logs.slice(-160) : a.buildLog,
+      } : a),
+    }));
+    return { ready, terminal };
   }, []);
 
   const startBuild = useCallback(async (id: string, force = false) => {
@@ -735,181 +737,109 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!force && bootedBuilds.current.has(id)) return;
     bootedBuilds.current.add(id);
     const startedAt = Date.now();
-    const health = await engineHealth();
     setState((s) => ({
       ...s,
       apps: s.apps.map((a) => a.id === id ? {
-        ...a,
-        buildStatus: "building",
-        buildStartedAt: new Date(startedAt).toISOString(),
-        buildDeadline: startedAt + BUILD_TIMEOUT_MS,
-        buildError: undefined,
-        artifactReady: false,
-        artifactList: [],
-        buildState: "queued",
-        engine: health.buildEnabled ? "kaggle" : "installable",
-        buildLog: [
-          "Project validated · credit reserved",
-          health.buildEnabled
-            ? "Kaggle Android build engine verified"
-            : `Kaggle engine unavailable (${health.credentials}) — preparing an installable package`,
-        ],
+        ...a, buildStatus: "building", buildStartedAt: new Date(startedAt).toISOString(),
+        buildDeadline: startedAt + BUILD_TIMEOUT_MS, buildError: undefined, artifactReady: false,
+        artifactList: [], buildState: "queued", engine: "server",
+        buildLog: ["Validating project…", "Submitting to the secure build pipeline…"],
       } : a),
     }));
-    if (!health.buildEnabled) {
-      await installableFallback(id, `APK build engine is not configured on the server (credentials: ${health.credentials}). The app is delivered as a working installable package.`, startedAt);
-      return;
-    }
     try {
-      const queued = await queueKaggleBuild(app, app.sourceId);
+      const queued = await queueBuild(app);
       if (stateRef.current.user) {
         void writeProjectMeta(stateRef.current.user.uid, id, {
           id, name: app.name, packageId: app.packageId, type: app.type, template: app.template,
           buildType: app.buildType, buildStatus: "building", createdAt: app.createdAt, source: app.sourceLabel,
-          permissions: app.permissions, engine: "kaggle", kaggleJobId: queued.job.id,
-          kaggleKernel: queued.job.kernelUrl, kaggleStatus: queued.job.kernelStatus,
-          ads: app.adsEnabled ? { network: app.adNetwork, formats: app.adFormats, timing: app.adTiming, appIdManaged: true } : null,
+          permissions: app.permissions, buildJobId: queued.job.id,
+          ads: app.adsEnabled ? { network: "admob", formats: app.adFormats, timing: app.adTiming, testMode: app.adTestMode !== false } : null,
           quotaCharged: true, updatedAt: new Date().toISOString(),
         });
       }
       setState((s) => ({
         ...s,
         apps: s.apps.map((a) => a.id === id ? {
-          ...a,
-          buildJobId: queued.job.id,
-          kernelUrl: queued.job.kernelUrl ?? undefined,
-          kernelStatus: queued.job.kernelStatus ?? "queued",
-          queuePosition: queued.queuePosition,
-          artifactKind: "apk",
-          engine: "kaggle",
-          sourceId: app.sourceId,
-          notes: [...a.notes, `Kaggle build job ${queued.job.id}`, queued.job.kernelUrl ? `Kernel: ${queued.job.kernelUrl}` : "Notebook kernel queued"],
+          ...a, buildJobId: queued.job.id, queuePosition: queued.queuePosition,
           buildLog: [...(queued.job.logs ?? []), `Queue position ${queued.queuePosition}`],
         } : a),
       }));
-      await pollKaggle(id, queued.job.id, startedAt);
+      await pollBuild(id, queued.job.id, startedAt);
     } catch (e) {
       const err = e as Error & { code?: string };
       if (err.code === "BUILD_IN_PROGRESS") {
-        setState((s) => ({ ...s, apps: s.apps.map((a) => (a.id === id ? { ...a, buildStatus: "building", buildLog: [...(a.buildLog ?? []), err.message] } : a)) }));
+        setState((s) => ({ ...s, apps: s.apps.map((a) => a.id === id ? { ...a, buildStatus: "building", buildLog: [...(a.buildLog ?? []), err.message] } : a) }));
         return;
       }
-      await installableFallback(id, `${err.message}. The installable package is ready; no credit was lost.`, startedAt);
-    }
-  }, [installableFallback]);
-
-  const pollKaggle = useCallback(async (id: string, jobId: string, startedAt: number): Promise<boolean> => {
-    let consecutiveErrors = 0;
-    while (Date.now() - startedAt < BUILD_TIMEOUT_MS) {
-      await new Promise((r) => setTimeout(r, 8000));
-      try {
-        const job = await kaggleBuildStatus(jobId);
-        consecutiveErrors = 0;
-        const logs = (job.logs ?? []).slice(-120);
-        if (job.status === "ready") {
-          const artifacts = artifactsFromJob(job);
-          const apk = artifacts.find((a) => /\.apk$/i.test(a.name)) ?? artifacts.find((a) => /\.aab$/i.test(a.name));
-          setState((s) => ({
-            ...s,
-            apps: s.apps.map((a) => a.id === id ? {
-              ...a,
-              buildStatus: artifacts.length > 0 ? "ready" : "failed",
-              artifactKind: artifacts.length > 0 ? "apk" : "pwa",
-              artifactReady: artifacts.length > 0,
-              buildState: artifacts.length > 0 ? "apk-ready" : "apk-failed",
-              kernelStatus: job.kernelStatus ?? "complete",
-              kernelUrl: job.kernelUrl ?? a.kernelUrl,
-              buildJobId: job.id,
-              artifactList: artifacts,
-              artifactMb: apk ? Math.round((apk.size_in_bytes / 1024 / 1024) * 10) / 10 : a.artifactMb,
-              buildMs: Date.now() - startedAt,
-              linkExpiresAt: job.expiresAt ?? Date.now() + DOWNLOAD_TTL_SECONDS * 1000,
-              buildError: job.error ?? undefined,
-              notes: [...a.notes, `Kaggle build complete · ${artifacts.length} artifact(s)`, "Temporary download expires after 9 minutes"],
-              buildLog: logs.length ? logs : a.buildLog,
-            } : a),
-          }));
-          return true;
-        }
-        if (job.status === "failed" || job.status === "timeout" || job.status === "expired" || job.status === "cancelled") {
-          setState((s) => ({
-            ...s,
-            apps: s.apps.map((a) => a.id === id ? {
-              ...a,
-              kernelStatus: job.kernelStatus ?? job.status,
-              kernelUrl: job.kernelUrl ?? a.kernelUrl,
-              buildLog: logs.length ? logs : a.buildLog,
-              buildError: job.error ?? `Kaggle build ${job.status}.`,
-            } : a),
-          }));
-          await installableFallback(id, job.error ?? `Kaggle build ${job.status}. Installable package is ready.`, startedAt);
-          return false;
-        }
-        setState((s) => ({
-          ...s,
-          apps: s.apps.map((a) => a.id === id ? {
-            ...a,
-            buildStatus: "building",
-            kernelStatus: job.kernelStatus ?? "running",
-            kernelUrl: job.kernelUrl ?? a.kernelUrl,
-            queuePosition: job.queuePosition,
-            buildLog: logs.length ? logs : a.buildLog,
-          } : a),
-        }));
-      } catch (e) {
-        consecutiveErrors += 1;
-        setState((s) => ({ ...s, apps: s.apps.map((a) => (a.id === id ? { ...a, buildLog: [...(a.buildLog ?? []), `Status check ${consecutiveErrors}: ${(e as Error).message}`].slice(-120) } : a)) }));
-        if (consecutiveErrors >= 6) {
-          await installableFallback(id, `Lost contact with the build server (${(e as Error).message}). The installable package is ready.`, startedAt);
-          return false;
-        }
-      }
-    }
-    await installableFallback(id, `Kaggle build exceeded the ${Math.round(BUILD_TIMEOUT_MS / 60000)}-minute timeout. The installable package is ready; no credit was charged.`, startedAt);
-    return false;
-  }, [installableFallback]);
-
-  const checkApkBuild = useCallback(async (id: string): Promise<{ ok: boolean; message: string }> => {
-    const app = stateRef.current.apps.find((a) => a.id === id);
-    if (!app?.buildJobId) return { ok: false, message: "No Kaggle build job is linked. Use Create again to start a real APK build." };
-    try {
-      const job = await kaggleBuildStatus(app.buildJobId);
-      const artifacts = artifactsFromJob(job);
-      const status = job.status === "ready" ? "ready" : job.status === "failed" || job.status === "timeout" ? "failed" : "building";
+      bootedBuilds.current.delete(id);
       setState((s) => ({
         ...s,
         apps: s.apps.map((a) => a.id === id ? {
-          ...a,
-          buildStatus: status,
-          kernelStatus: job.kernelStatus ?? a.kernelStatus,
-          kernelUrl: job.kernelUrl ?? a.kernelUrl,
-          artifactList: artifacts.length ? artifacts : a.artifactList,
-          artifactReady: artifacts.length > 0,
-          ...(artifacts.length ? { artifactKind: "apk" as const, buildState: "apk-ready" as const, linkExpiresAt: job.expiresAt ?? Date.now() + DOWNLOAD_TTL_SECONDS * 1000 } : {}),
-          buildError: job.error ?? a.buildError,
-          buildLog: job.logs?.length ? job.logs : a.buildLog,
+          ...a, buildStatus: "failed", buildState: "apk-failed", artifactReady: false,
+          buildError: err.message, buildLog: [...(a.buildLog ?? []), `Build failed: ${err.message}`],
         } : a),
       }));
+    }
+  }, []);
+
+  const pollBuild = useCallback(async (id: string, jobId: string, startedAt: number): Promise<boolean> => {
+    let consecutiveErrors = 0;
+    while (Date.now() - startedAt < BUILD_TIMEOUT_MS) {
+      await new Promise((r) => setTimeout(r, 8000));
+      const current = stateRef.current.apps.find((a) => a.id === id);
+      if (!current || current.buildStatus === "cancelled") return false;
+      try {
+        const job = await buildStatus(jobId);
+        consecutiveErrors = 0;
+        const { ready, terminal } = applyJob(id, job, startedAt);
+        if (ready) {
+          if (stateRef.current.user) void writeProjectMeta(stateRef.current.user.uid, id, { buildStatus: "ready", updatedAt: new Date().toISOString() });
+          return true;
+        }
+        if (terminal) {
+          bootedBuilds.current.delete(id);
+          if (stateRef.current.user) void writeProjectMeta(stateRef.current.user.uid, id, { buildStatus: job.status === "cancelled" ? "cancelled" : "failed", updatedAt: new Date().toISOString() });
+          return false;
+        }
+      } catch (e) {
+        consecutiveErrors += 1;
+        setState((s) => ({ ...s, apps: s.apps.map((a) => a.id === id ? { ...a, buildLog: [...(a.buildLog ?? []), `Status check ${consecutiveErrors}: ${(e as Error).message}`].slice(-160) } : a) }));
+        if (consecutiveErrors >= 10) {
+          bootedBuilds.current.delete(id);
+          setState((s) => ({ ...s, apps: s.apps.map((a) => a.id === id ? { ...a, buildStatus: "failed", buildState: "apk-failed", buildError: `Lost contact with the build server: ${(e as Error).message}. Use Check build status to reconnect.` } : a) }));
+          return false;
+        }
+      }
+    }
+    bootedBuilds.current.delete(id);
+    setState((s) => ({ ...s, apps: s.apps.map((a) => a.id === id ? { ...a, buildStatus: "failed", buildState: "timeout", buildError: `Build exceeded the ${Math.round(BUILD_TIMEOUT_MS / 60000)}-minute window. Check build status or rebuild.` } : a) }));
+    return false;
+  }, [applyJob]);
+
+  const checkApkBuild = useCallback(async (id: string): Promise<{ ok: boolean; message: string }> => {
+    const app = stateRef.current.apps.find((a) => a.id === id);
+    if (!app?.buildJobId) return { ok: false, message: "No build job is linked. Use Rebuild to start a real APK build." };
+    try {
+      const job = await buildStatus(app.buildJobId);
+      const { ready } = applyJob(id, job, app.buildStartedAt ? new Date(app.buildStartedAt).getTime() : Date.now());
       return {
-        ok: job.status === "ready" && artifacts.length > 0,
-        message: job.status === "ready"
-          ? `${artifacts.length} real APK/AAB artifact(s) ready from Kaggle.`
-          : `${job.error ?? `Kaggle status: ${job.kernelStatus ?? job.status}`}`,
+        ok: ready,
+        message: ready ? `${job.artifacts.length} verified APK/AAB artifact(s) ready.` : (job.error ?? `Build status: ${job.status}`),
       };
     } catch (e) {
       return { ok: false, message: (e as Error).message };
     }
-  }, []);
+  }, [applyJob]);
 
   const cancelBuild = useCallback(async (id: string): Promise<{ ok: boolean; message: string }> => {
     const app = stateRef.current.apps.find((a) => a.id === id);
-    if (!app?.buildJobId) return { ok: false, message: "No Kaggle job to cancel." };
-    const res = await cancelKaggleBuild(app.buildJobId);
+    if (!app?.buildJobId) return { ok: false, message: "No build job to cancel." };
+    const res = await cancelServerBuild(app.buildJobId);
     if (res.ok) {
-      setState((s) => ({ ...s, apps: s.apps.map((a) => (a.id === id ? { ...a, buildStatus: "ready", buildError: "Build cancelled before execution. Installable package remains available.", buildLog: [...(a.buildLog ?? []), "Build cancelled"] } : a)) }));
-      return { ok: true, message: "Queued build cancelled." };
+      setState((s) => ({ ...s, apps: s.apps.map((a) => (a.id === id ? { ...a, buildStatus: "cancelled", buildState: "cancelled", artifactReady: false, buildError: "Build cancelled.", buildLog: [...(a.buildLog ?? []), "Build cancelled"] } : a)) }));
+      return { ok: true, message: "Build cancelled." };
     }
-    return { ok: false, message: res.error ?? "Kaggle does not support cancelling a running notebook." };
+    return { ok: false, message: res.error ?? "Could not cancel the build." };
   }, []);
 
   const rebuildApp = useCallback(async (id: string) => {
@@ -917,15 +847,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setState((s) => ({
       ...s,
       apps: s.apps.map((a) => (a.id === id ? { ...a, notes: [...a.notes, "Rebuild requested · no new credit consumed"] } : a)),
-      activities: [{ id: makeId("ACT"), title: "Rebuild requested", detail: `${id} · 0 credits consumed · Kaggle engine`, at: new Date().toISOString(), kind: "build" }, ...s.activities],
+      activities: [{ id: makeId("ACT"), title: "Rebuild requested", detail: `${id} · 0 credits consumed`, at: new Date().toISOString(), kind: "build" }, ...s.activities],
     }));
     await startBuild(id, true);
   }, [startBuild]);
 
+  // Resume polling for in-flight builds after a reload (never auto-requeue).
   useEffect(() => {
     if (!state.authReady) return;
     state.apps
-      .filter((a) => a.buildStatus === "queued" && !a.buildLog?.some((l) => /starting|preparing|package generated|dispatched/i.test(l)))
+      .filter((a) => (a.buildStatus === "building" || a.buildStatus === "queued") && a.buildJobId && !bootedBuilds.current.has(a.id))
+      .slice(0, 3)
+      .forEach((a) => {
+        bootedBuilds.current.add(a.id);
+        void pollBuild(a.id, a.buildJobId!, a.buildStartedAt ? new Date(a.buildStartedAt).getTime() : Date.now());
+      });
+    state.apps
+      .filter((a) => a.buildStatus === "queued" && !a.buildJobId && !bootedBuilds.current.has(a.id))
       .slice(0, 3)
       .forEach((a) => { void startBuild(a.id); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -939,34 +877,36 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setState((s) => ({ ...s, apps: s.apps.filter((a) => a.id !== id) }));
   }, []);
 
-  const submitPayment = useCallback<StoreValue["submitPayment"]>((data) => {
+  const submitPayment = useCallback<StoreValue["submitPayment"]>(async (data) => {
     const plan = planById(data.planId);
-    const orderId = makeId("ORD");
     const clean = data.utr.replace(/\s+/g, "");
+    const res = await submitPaymentRequest({ planId: plan.id, method: data.method, utr: clean });
+    if (!res.ok || !res.payment) return { ok: false, orderId: "", message: res.message || "Could not submit the payment request." };
+    const p = res.payment;
     const payment: Payment = {
-      id: makeId("PAY"),
-      orderId,
-      planId: plan.id,
-      planName: plan.name,
-      amount: plan.price,
-      method: data.method,
-      utr: clean.length > 6 ? `${clean.slice(0, 4)}••••${clean.slice(-4)}` : clean,
-      createdAt: new Date().toISOString(),
-      status: "pending",
+      id: p.id,
+      orderId: p.orderId,
+      planId: p.planId,
+      planName: planById(p.planId).name,
+      amount: planById(p.planId).price,
+      method: p.method,
+      utr: p.utr.length > 6 ? `${p.utr.slice(0, 4)}••••${p.utr.slice(-4)}` : p.utr,
+      createdAt: p.createdAt,
+      status: p.status,
     };
     setState((s) => ({
       ...s,
-      payments: [payment, ...s.payments],
+      payments: [payment, ...s.payments.filter((x) => x.id !== payment.id)],
       activities: [
-        { id: makeId("ACT"), title: "Payment submitted", detail: `${orderId} · ${plan.name} · ₹${plan.price.toLocaleString("en-IN")} · pending approval`, at: new Date().toISOString(), kind: "billing" },
+        { id: makeId("ACT"), title: "Payment submitted", detail: `${payment.orderId} · ${plan.name} · pending approval`, at: new Date().toISOString(), kind: "billing" },
         ...s.activities,
       ],
       notifications: [
-        { id: makeId("NTF"), title: "Payment request pending", body: `${orderId} for ${plan.name} awaits administrator verification.`, at: new Date().toISOString(), read: false, kind: "billing" },
+        { id: makeId("NTF"), title: "Payment request pending", body: `${payment.orderId} for ${plan.name} awaits administrator verification.`, at: new Date().toISOString(), read: false, kind: "billing" },
         ...s.notifications,
       ],
     }));
-    return { ok: true, orderId };
+    return { ok: true, orderId: payment.orderId };
   }, []);
 
   const createApiKey = useCallback<StoreValue["createApiKey"]>(async (label) => {
@@ -1040,7 +980,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       login,
       googleLogin,
       logout,
-      continueOffline,
       resendVerification,
       refreshVerification,
       resetPassword,
@@ -1062,7 +1001,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       markNotificationsRead,
       resetWorkspace,
     }),
-    [state, theme, toggleTheme, register, login, googleLogin, logout, continueOffline, resendVerification, refreshVerification, resetPassword, updateUser, createApp, rebuildApp, startBuild, cancelBuild, checkApkBuild, updateApp, deleteApp, submitPayment, createApiKey, revokeApiKey, pushActivity, addSupport, retrySupport, markNotificationsRead, resetWorkspace]
+    [state, theme, toggleTheme, register, login, googleLogin, logout, resendVerification, refreshVerification, resetPassword, updateUser, createApp, rebuildApp, startBuild, cancelBuild, checkApkBuild, updateApp, deleteApp, submitPayment, createApiKey, revokeApiKey, pushActivity, addSupport, retrySupport, markNotificationsRead, resetWorkspace]
   );
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;

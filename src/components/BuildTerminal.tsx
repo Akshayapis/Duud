@@ -79,7 +79,7 @@ export function BuildTerminal() {
                 <span className={/error|fail|note|timeout/i.test(line) ? "text-amber-300" : /ready|complete|success|generated|pushed|created/i.test(line) ? "text-lime" : "text-[#b9c2b0]"}>{line}</span>
               </div>
             ))}
-            {building && <div className="mt-1 flex items-center gap-2 text-white/35"><Loader2 className="h-2.5 w-2.5 animate-spin" /> waiting for the next Kaggle build event…</div>}
+            {building && <div className="mt-1 flex items-center gap-2 text-white/35"><Loader2 className="h-2.5 w-2.5 animate-spin" /> waiting for the next build event…</div>}
             {!building && target.buildStatus === "ready" && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 <Link to={`/app/apps/${target.id}/download`} className="rounded bg-lime px-2 py-1 text-[8px] font-bold text-limeink">Download / install</Link>

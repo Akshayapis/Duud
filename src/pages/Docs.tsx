@@ -146,7 +146,7 @@ export function ApiDocsPage() {
               {[
                 { label: "API status", value: "v1 spec", sub: "Backend deployment required", tone: "amber" as const, icon: Server },
                 { label: "Active plan", value: state.user ? activePlan.name : "—", sub: state.user ? `${quota.state}` : "Sign in required", tone: "neutral" as const, icon: Zap },
-                { label: "App credits", value: state.user ? `${quota.remaining}/${quota.allowance}` : "—", sub: state.user ? `Resets ${quota.resetLabel}` : "Per Firebase UID", tone: quota.remaining > 0 ? "green" as const : "rose" as const, icon: Layers },
+                { label: "App credits", value: state.user ? `${quota.remaining}/${quota.allowance}` : "—", sub: state.user ? `Resets ${quota.resetLabel}` : "Per verified account", tone: quota.remaining > 0 ? "green" as const : "rose" as const, icon: Layers },
                 { label: "API usage", value: String(state.apiUsage), sub: `${keys.length} active keys`, tone: "sky" as const, icon: Code2 },
               ].map((s) => (
                 <Card key={s.label} className="p-3.5">
@@ -444,7 +444,7 @@ export function AdDocsPage() {
           <div className="space-y-4">
             <Card className="p-4">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div><h2 className="text-[12.5px] font-semibold text-ink">Network catalogue</h2><p className="text-[10px] text-muted">{NETWORKS.length} integrations · credentials are configured per project</p></div>
+                <div><h2 className="text-[12.5px] font-semibold text-ink">Network catalogue</h2><p className="text-[10px] text-muted">{NETWORKS.length} supported integration · credentials are configured per project</p></div>
                 <div className="relative sm:w-52"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted" /><Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search networks…" className="h-9 pl-8 text-[11px]" /></div>
               </div>
               <div className="mt-2.5 grid gap-1.5 sm:grid-cols-2">
@@ -470,8 +470,8 @@ export function AdDocsPage() {
                 <div className="rounded-xl border border-lime/25 bg-lime/[0.04] p-2.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <div className="text-[10px] font-semibold text-ink">Platform-managed App ID</div>
-                      <div className="text-[8.5px] text-muted">You never enter an App ID. The platform injects its verified network App ID.</div>
+                      <div className="text-[10px] font-semibold text-ink">AdMob App ID</div>
+                      <div className="text-[8.5px] text-muted">Test builds use Google test inventory. Live builds require your real AdMob App ID.</div>
                     </div>
                     <span className="rounded bg-lime px-1.5 py-0.5 text-[7px] font-bold uppercase text-limeink">managed</span>
                   </div>
@@ -509,7 +509,7 @@ export function AdDocsPage() {
               </div>
               <div className="mt-2.5 grid gap-1.5 sm:grid-cols-2">
                 <Select value={tagFormat} onChange={(e) => setTagFormat(e.target.value as AdTagFormat)} className="h-9 text-[10.5px]">
-                  {(["banner", "mrec", "interstitial", "rewarded", "app-open", "native"] as AdTagFormat[]).map((f) => <option key={f} value={f}>{f.replace("-", " ")}</option>)}
+                  {(["banner", "mrec", "interstitial", "rewarded", "app-open"] as AdTagFormat[]).map((f) => <option key={f} value={f}>{f.replace("-", " ")}</option>)}
                 </Select>
                 <Input value={tagProject} onChange={(e) => setTagProject(e.target.value.toUpperCase())} placeholder="Project ID" className="h-9 font-mono text-[10px]" aria-label="Project ID for ad tags" />
               </div>
@@ -522,7 +522,7 @@ export function AdDocsPage() {
                       <div className="flex gap-1.5">
                         <button onClick={() => { void navigator.clipboard.writeText(tag?.html ?? ""); setTagCopied(true); window.setTimeout(() => setTagCopied(false), 1500); }} className="rounded border border-white/15 px-1.5 py-0.5 text-[8px] font-semibold text-white/70">{tagCopied ? "Copied" : "Copy tag"}</button>
                         <button onClick={() => {
-                          const blob = new Blob([allAdTagsHtml(selectedNet.id, tagProject || "APP-LOCAL01", (["banner", "mrec", "interstitial", "rewarded", "native"] as AdTagFormat[]))], { type: "text/html" });
+                          const blob = new Blob([allAdTagsHtml(selectedNet.id, tagProject || "APP-LOCAL01", (["banner", "mrec", "interstitial", "rewarded", "app-open"] as AdTagFormat[]))], { type: "text/html" });
                           const url = URL.createObjectURL(blob);
                           const a = document.createElement("a"); a.href = url; a.download = `${selectedNet.id}-ad-tags.html`; a.click();
                           window.setTimeout(() => URL.revokeObjectURL(url), 20000);
@@ -533,7 +533,7 @@ export function AdDocsPage() {
                   </div>
                 );
               })()}
-              <p className="mt-1.5 text-[8.5px] leading-relaxed text-muted">{adTagsFor(selectedNet.id, tagProject || "APP-LOCAL01", [tagFormat])[0]?.note} Har tag platform-managed App ID aur auto placement ID ke saath aata hai.</p>
+              <p className="mt-1.5 text-[8.5px] leading-relaxed text-muted">{adTagsFor(selectedNet.id, tagProject || "APP-LOCAL01", [tagFormat])[0]?.note} Har tag project placement ID ke saath aata hai; live IDs builder mein configure hote hain.</p>
             </Card>
           </div>
 
@@ -560,7 +560,7 @@ export function AdDocsPage() {
             <Card className="overflow-hidden">
               <div className="flex items-center justify-between border-b border-line px-3 py-2">
                 <div className="flex items-center gap-1.5"><Terminal className="h-3.5 w-3.5 text-muted" /><span className="text-[10.5px] font-semibold text-ink">Load ad request</span></div>
-                <Badge tone={adResult?.mode === "live" ? "green" : "lime"}>{adResult?.mode === "live" ? "live mediation" : "test inventory"}</Badge>
+                <Badge tone={adResult?.ok ? "lime" : "amber"}>{adResult?.ok ? "config preview" : "unsupported"}</Badge>
               </div>
               <div className="space-y-2 p-3">
                 <div className="grid grid-cols-2 gap-1.5">
@@ -601,9 +601,7 @@ export function AdDocsPage() {
                 )}
                 <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2">
                   <p className="text-[8px] leading-relaxed text-muted">
-                    Request always uses the platform-managed App ID above — never a user-entered App ID. This is a real
-                    request contract in official test-inventory mode. Add <span className="font-mono">VITE_UAPP_ADS_ENDPOINT</span> to
-                    execute against live mediation, and <span className="font-mono">VITE_UAPP_AD_&lt;NETWORK&gt;_APPID</span> for production IDs.
+                    This is a configuration preview, not a served ad. Browsers cannot serve native ads. The installed app loads the placement through the official SDK after UMP consent. Live builds require your real AdMob App ID and ad unit IDs.
                   </p>
                 </div>
               </div>

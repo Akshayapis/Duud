@@ -16,7 +16,6 @@ import {
   ShieldCheck,
   Sparkles,
   TriangleAlert,
-  WifiOff,
   Zap,
 } from "lucide-react";
 import { Badge, Button, buttonClass, Field, Input, Logo, useToast } from "@/components/ui";
@@ -58,10 +57,10 @@ function AuthFrame({ title, subtitle, children }: { title: string; subtitle: str
               <div className="mt-3 flex gap-1.5">
                 {Array.from({ length: FREE_MONTHLY_CREDITS }).map((_, i) => <span key={i} className="h-1.5 flex-1 rounded-full bg-lime/80" />)}
               </div>
-              <p className="mt-3 text-[10.5px] leading-relaxed text-[#7c847b]">Enforced per Firebase UID. Resets automatically at the start of every calendar month.</p>
+              <p className="mt-3 text-[10.5px] leading-relaxed text-[#7c847b]">Enforced per verified account. Resets automatically at the start of every calendar month.</p>
             </div>
             <div className="mt-6 flex flex-wrap gap-x-5 gap-y-2 text-[10.5px] text-[#8b9387]">
-              <span className="inline-flex items-center gap-1.5"><ShieldCheck className="h-3 w-3 text-lime" /> Firebase Authentication</span>
+              <span className="inline-flex items-center gap-1.5"><ShieldCheck className="h-3 w-3 text-lime" /> Secure authentication</span>
               <span className="inline-flex items-center gap-1.5"><Lock className="h-3 w-3 text-lime" /> Passwords never stored here</span>
               <span className="inline-flex items-center gap-1.5"><Zap className="h-3 w-3 text-lime" /> 3 free builds</span>
             </div>
@@ -93,7 +92,7 @@ function AuthFrame({ title, subtitle, children }: { title: string; subtitle: str
 
 type AuthError = { message: string; kind?: string } | null;
 
-function AuthErrorCard({ error, onOffline, offlineEmail, offlineName }: { error: AuthError; onOffline: () => void; offlineEmail?: string; offlineName?: string }) {
+function AuthErrorCard({ error }: { error: AuthError }) {
   if (!error) return null;
   const recoverable = error.kind === "domain" || error.kind === "config" || error.kind === "network";
   return (
@@ -105,15 +104,10 @@ function AuthErrorCard({ error, onOffline, offlineEmail, offlineName }: { error:
       {recoverable && (
         <div className="mt-2.5 border-t border-rose-500/15 pt-2.5">
           <p className="text-[9.5px] leading-relaxed text-muted">
-            Firebase Console → Authentication → Settings → Authorized domains. Add this exact host:{" "}
+            The site owner must authorise this exact hostname in the authentication provider settings:{" "}
             <code className="rounded bg-panel px-1 py-0.5 font-mono text-[9px] text-ink">{typeof window !== "undefined" ? window.location.hostname : "your-domain"}</code>
           </p>
-          <button onClick={onOffline} className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-[10px] font-semibold text-ink transition hover:border-lime/40">
-            <WifiOff className="h-3 w-3 text-amber-500" /> Continue on this device instead
-          </button>
-          <p className="mt-1 text-[8.5px] leading-relaxed text-muted">
-            {offlineName ? `Creates a device-local workspace (${offlineEmail || "no email"}) without cloud sign-in. Your projects stay in this browser.` : "Creates a device-local workspace without cloud sign-in."}
-          </p>
+          <p className="mt-1 text-[8.5px] leading-relaxed text-muted">Sign-in is required to create apps. Device-local sessions cannot verify identity or quota.</p>
         </div>
       )}
     </div>
@@ -169,7 +163,7 @@ function Divider() {
 /* ------------------------------------------------------------------ Login */
 
 export function LoginPage() {
-  const { state, login, continueOffline } = useStore();
+  const { state, login } = useStore();
   const { toast } = useToast();
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -203,7 +197,7 @@ export function LoginPage() {
   };
 
   return (
-    <AuthFrame title="Welcome back" subtitle="Sign in with Google or your email. Authentication is handled by Firebase.">
+    <AuthFrame title="Welcome back" subtitle="Sign in with Google or your email. Authentication is handled by a secure identity provider.">
       {state.user && state.authReady && (
         <div className="mb-3 flex items-center gap-2 rounded-xl border border-lime/25 bg-lime/5 px-3 py-2">
           <CheckCircle2 className="h-3.5 w-3.5 text-lime" />
@@ -229,10 +223,10 @@ export function LoginPage() {
           </div>
         </Field>
         <div className="flex items-center justify-between">
-          <span className="inline-flex items-center gap-1 text-[10px] text-muted"><ShieldCheck className="h-3 w-3 text-lime" /> Firebase secured</span>
+          <span className="inline-flex items-center gap-1 text-[10px] text-muted"><ShieldCheck className="h-3 w-3 text-lime" /> Secure sign-in</span>
           <button type="button" onClick={() => setResetOpen(true)} className="text-[11px] font-semibold text-ink hover:text-lime">Forgot password?</button>
         </div>
-        <AuthErrorCard error={error} onOffline={() => { continueOffline({ name: email.split("@")[0] || "Builder", email }); toast("Device-local workspace opened. Data stays in this browser.", "info"); navigate("/app"); }} offlineEmail={email} />
+        <AuthErrorCard error={error} />
         <Button type="submit" variant="lime" className="w-full" loading={busy}>Sign in <ArrowRight className="h-4 w-4" /></Button>
       </form>
       {resetOpen && <ResetPassword email={email} onClose={() => setResetOpen(false)} />}
@@ -240,7 +234,7 @@ export function LoginPage() {
         New to U APP? <Link to="/register" className="font-semibold text-ink hover:text-lime">Create an account</Link>
       </p>
       <div className="mt-4 flex items-center justify-center gap-1.5 text-[9px] text-muted">
-        {isFirebaseReady ? <><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Firebase project connected</> : <><span className="h-1.5 w-1.5 rounded-full bg-rose-400" /> Firebase configuration error</>}
+        {isFirebaseReady ? <><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Identity provider connected</> : <><span className="h-1.5 w-1.5 rounded-full bg-rose-400" /> Identity provider configuration error</>}
       </div>
     </AuthFrame>
   );
@@ -257,7 +251,7 @@ function ResetPassword({ email, onClose }: { email: string; onClose: () => void 
         <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-ink"><KeyRound className="h-3.5 w-3.5 text-lime" /> Reset password</span>
         <button onClick={onClose} className="text-[9.5px] text-muted hover:text-ink">Close</button>
       </div>
-      <p className="mt-1 text-[10px] leading-relaxed text-muted">Firebase will email a secure reset link to this address.</p>
+      <p className="mt-1 text-[10px] leading-relaxed text-muted">A secure reset link will be emailed to this address.</p>
       <div className="mt-2 flex gap-2">
         <Input value={value} onChange={(e) => setValue(e.target.value)} type="email" placeholder="you@example.com" />
         <Button
@@ -280,7 +274,7 @@ function ResetPassword({ email, onClose }: { email: string; onClose: () => void 
 /* ------------------------------------------------------------------ Register */
 
 export function RegisterPage() {
-  const { register, continueOffline } = useStore();
+  const { register } = useStore();
   const { toast } = useToast();
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -323,7 +317,7 @@ export function RegisterPage() {
   };
 
   return (
-    <AuthFrame title="Create your account" subtitle="A real Firebase account with 3 free app creation credits every calendar month.">
+    <AuthFrame title="Create your account" subtitle="A verified account with 3 free app creation credits every calendar month.">
       <GoogleButton label="Sign up with Google" onError={setError} />
       <Divider />
       <form onSubmit={submit} className="space-y-3.5">
@@ -333,7 +327,7 @@ export function RegisterPage() {
         <Field label="Email address" error={errs.email}>
           <Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} type="email" placeholder="you@example.com" required autoComplete="email" />
         </Field>
-        <Field label="Password" hint="Handled by Firebase Authentication. U APP never receives or stores your password." error={errs.password}>
+        <Field label="Password" hint="Handled by Secure authentication. U APP never receives or stores your password." error={errs.password}>
           <div className="relative">
             <Input value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} type={show ? "text" : "password"} placeholder="Create a strong password" className="pr-10" required autoComplete="new-password" />
             <button type="button" onClick={() => setShow(!show)} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1.5 text-muted hover:text-ink" aria-label="Toggle password">
@@ -361,13 +355,13 @@ export function RegisterPage() {
           <input type="checkbox" required className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-line accent-lime" />
           <span>I agree to the acceptable-use rules for app creation and understand that paid plans activate only after manual UPI approval.</span>
         </label>
-        <AuthErrorCard error={error} onOffline={() => { continueOffline({ name: form.name, email: form.email }); toast("Device-local workspace opened. Firebase sign-in is unavailable.", "info"); navigate("/app"); }} offlineName={form.name} offlineEmail={form.email} />
-        <Button type="submit" variant="lime" className="w-full" loading={busy}>Create Firebase account <ArrowRight className="h-4 w-4" /></Button>
+        <AuthErrorCard error={error} />
+        <Button type="submit" variant="lime" className="w-full" loading={busy}>Create account <ArrowRight className="h-4 w-4" /></Button>
       </form>
       <div className="mt-4 grid grid-cols-2 gap-2">
         {[
           [CheckCircle2, "3 free apps / month"],
-          [ShieldCheck, "Firebase secured"],
+          [ShieldCheck, "Secure sign-in"],
           [Zap, "54 UI templates"],
           [Lock, "No card required"],
         ].map(([Ico, label]) => {
@@ -385,7 +379,7 @@ export function RegisterPage() {
 /* ------------------------------------------------------------------ Email verification */
 
 export function VerifyMagicPage() {
-  const { state, resendVerification, refreshVerification, continueOffline, updateUser } = useStore();
+  const { state, resendVerification, refreshVerification, updateUser } = useStore();
   const { toast } = useToast();
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -425,7 +419,7 @@ export function VerifyMagicPage() {
   };
 
   return (
-    <AuthFrame title="Verify your email" subtitle="Firebase sent a secure verification link to your inbox. Open it once, then confirm here.">
+    <AuthFrame title="Verify your email" subtitle="A secure verification link was sent to your inbox. Open it once, then confirm here.">
       <div className="rounded-2xl border border-line bg-panel p-5">
         {!state.authReady ? (
           <div className="flex items-center gap-3">
@@ -459,8 +453,8 @@ export function VerifyMagicPage() {
             <div className="mt-3 flex items-start gap-2 rounded-lg border border-line bg-panel2/40 p-2.5">
               <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
               <p className="text-[10px] leading-relaxed text-muted">
-                Open the link in the Firebase email (check spam). The link belongs to the Firebase project, and returns to
-                this app. If it does not arrive, resend below. Verification is a real Firebase check — never a simulated flag.
+                Open the verification email (check spam). The secure link returns to
+                this app. If it does not arrive, resend below. Verification is a real provider check — never a simulated flag.
               </p>
             </div>
             {notice && <p className={cn("mt-2 rounded-lg border px-3 py-2 text-[10.5px] leading-relaxed", notice.ok ? "border-emerald-500/25 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400" : "border-amber-500/25 bg-amber-500/5 text-amber-600 dark:text-amber-400")}>{notice.text}</p>}
@@ -475,18 +469,14 @@ export function VerifyMagicPage() {
         )}
       </div>
       <div className="mt-4 rounded-xl border border-line bg-panel/60 p-3">
-        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted"><Clock className="h-3 w-3" /> What Firebase handles</div>
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted"><Clock className="h-3 w-3" /> What secure sign-in handles</div>
         <ul className="mt-1.5 space-y-1">
           {["Cryptographically signed verification link", "Single-use email action", "Password reset without exposing passwords", "Google and email providers in the same UID space"].map((x) => (
             <li key={x} className="flex items-start gap-1.5 text-[9.5px] leading-relaxed text-muted"><CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-lime" /> {x}</li>
           ))}
         </ul>
       </div>
-      {state.authMode === "offline" && user && (
-        <button onClick={() => { continueOffline({ name: user.name, email: user.email }); toast("Device session refreshed.", "info"); navigate("/app"); }} className={buttonClass("secondary", "sm", "mt-3 w-full")}>
-          <WifiOff className="h-3.5 w-3.5" /> Refresh device-local session
-        </button>
-      )}
+
       <p className="mt-5 flex items-center justify-center gap-1.5 text-center text-[10px] text-muted">
         <Sparkles className="h-3 w-3 text-lime" /> Need help? <a href="mailto:akshay123fagg@gmail.com" className="font-semibold text-ink hover:text-lime">akshay123fagg@gmail.com</a>
       </p>

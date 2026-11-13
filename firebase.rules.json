@@ -6,26 +6,31 @@
     "users": {
       "$uid": {
         ".read": "auth != null && auth.uid === $uid",
-        ".write": "auth != null && auth.uid === $uid",
+        ".write": false,
 
         "profile": {
-          ".write": "auth != null && auth.uid === $uid"
+          ".read": "auth != null && auth.uid === $uid",
+          ".write": false,
+          "name": { ".write": "auth != null && auth.uid === $uid && newData.isString() && newData.val().length <= 120" },
+          "email": { ".write": "auth != null && auth.uid === $uid && newData.isString()" },
+          "provider": { ".write": "auth != null && auth.uid === $uid && newData.isString()" },
+          "emailVerified": { ".write": "auth != null && auth.uid === $uid && newData.isBoolean()" },
+          "createdAt": { ".write": "auth != null && auth.uid === $uid && newData.isString()" },
+          "photo": { ".write": "auth != null && auth.uid === $uid && newData.isString()" },
+          "bio": { ".write": "auth != null && auth.uid === $uid && newData.isString() && newData.val().length <= 500" },
+          "company": { ".write": "auth != null && auth.uid === $uid && newData.isString() && newData.val().length <= 120" },
+          "notifyBuilds": { ".write": "auth != null && auth.uid === $uid && newData.isBoolean()" },
+          "notifyPayments": { ".write": "auth != null && auth.uid === $uid && newData.isBoolean()" },
+          "notifyProduct": { ".write": "auth != null && auth.uid === $uid && newData.isBoolean()" },
+          "planId": { ".write": false },
+          "planActivatedAt": { ".write": false },
+          "planExpiresAt": { ".write": false },
+          "plan": { ".write": false },
+          "subscription": { ".write": false },
+          "quota": { ".write": false },
+          "usedCredits": { ".write": false },
+          "monthlyAllowance": { ".write": false }
         },
-        "uid": { ".write": false },
-        "email": { ".write": false },
-        "emailVerified": { ".write": false },
-        "accountStatus": { ".write": false },
-        "createdAt": { ".write": false },
-        "authenticationProvider": { ".write": false },
-
-        "subscription": { ".write": false },
-        "planId": { ".write": false },
-        "plan": { ".write": false },
-        "planActivatedAt": { ".write": false },
-        "planExpiresAt": { ".write": false },
-        "quota": { ".write": false },
-        "usedCredits": { ".write": false },
-        "monthlyAllowance": { ".write": false },
 
         "activity": {
           "$eventId": {
@@ -34,9 +39,7 @@
         },
         "projects": {
           "$projectId": {
-            ".write": "auth != null && auth.uid === $uid",
-            "plan": { ".write": false },
-            "quotaCharged": { ".write": false }
+            ".write": "auth != null && auth.uid === $uid"
           }
         },
         "apiKeys": {
@@ -64,13 +67,7 @@
       "$uid": {
         "$paymentId": {
           ".read": "auth != null && auth.uid === $uid",
-          ".write": "auth != null && auth.uid === $uid",
-          "status": { ".write": false },
-          "approvedAt": { ".write": false },
-          "approvedBy": { ".write": false },
-          "rejectionReason": { ".write": false },
-          "amount": { ".write": false },
-          "planId": { ".write": false }
+          ".write": false
         }
       }
     },

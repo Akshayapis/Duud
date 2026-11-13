@@ -1,4 +1,4 @@
-# U APP — static site + Kaggle Android build engine
+# U APP — static site + isolated Android build engine
 # Node 24.12+ is required by the Firebase 13 packages (and satisfies Vite 7).
 FROM node:24-alpine AS build
 WORKDIR /app
@@ -9,38 +9,33 @@ COPY . .
 # src/data/catalog.ts, so the build never fails when these are absent.
 ARG VITE_UAPP_UPI_ID=""
 ARG VITE_UAPP_UPI_NAME=""
-ARG VITE_UAPP_ADS_ENDPOINT=""
 ENV VITE_UAPP_UPI_ID=$VITE_UAPP_UPI_ID \
-    VITE_UAPP_UPI_NAME=$VITE_UAPP_UPI_NAME \
-    VITE_UAPP_ADS_ENDPOINT=$VITE_UAPP_ADS_ENDPOINT
+    VITE_UAPP_UPI_NAME=$VITE_UAPP_UPI_NAME
 RUN npm run build
 
 FROM node:24-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=8080 \
-    DATA_DIR=/tmp/uapp-data
+    DATA_DIR=/var/uapp-data
 
-# Runtime dependencies are installed in THIS stage. The previous version copied
-# only dist/server/kaggle, so server/index.mjs could not resolve "adm-zip" and
-# Render crashed with ERR_MODULE_NOT_FOUND. npm ci uses the committed lockfile.
-# ca-certificates is required for the Kaggle HTTPS API and Firebase token checks.
+# ca-certificates is required for the build-engine HTTPS API and Firebase token checks.
 RUN apk add --no-cache ca-certificates wget \
     && update-ca-certificates
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund \
     && npm cache clean --force \
-    && node -e "require('adm-zip'); console.log('runtime deps ok')"
+    && node -e "import('busboy').then(() => import('yauzl')).then(() => console.log('runtime deps ok'))"
 
 COPY --from=build /app/dist ./dist
 COPY server ./server
 COPY kaggle ./kaggle
 
-RUN mkdir -p /tmp/uapp-data/sources /tmp/uapp-data/artifacts \
+RUN mkdir -p /var/uapp-data/sources /var/uapp-data/artifacts \
     && addgroup -S uapp \
     && adduser -S uapp -G uapp \
-    && chown -R uapp:uapp /app /tmp/uapp-data
+    && chown -R uapp:uapp /app /var/uapp-data
 USER uapp
 
 EXPOSE 8080

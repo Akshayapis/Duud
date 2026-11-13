@@ -22,7 +22,7 @@ import { PageHeader } from "@/components/Shell";
 import { PlanCard } from "@/components/PlanCard";
 import { PublicFooter, PublicNav } from "@/components/PublicChrome";
 import { PLANS, SUPPORT_EMAIL } from "@/data/catalog";
-import { getUpiConfig, saveUpiConfig, appIntent, upiIntent, hydrateUpiFromServer } from "@/lib/payments";
+import { getUpiConfig, appIntent, upiIntent, hydrateUpiFromServer } from "@/lib/payments";
 import { QRCodeSVG } from "qrcode.react";
 import { formatDate, inr, planById, relativeTime, useStore } from "@/lib/store";
 import { cn } from "@/utils/cn";
@@ -222,12 +222,10 @@ export function PaymentPage() {
   const current = state.user?.planId === selected.id && quota.state === "active";
   const total = selected.price;
   const [upi, setUpi] = useState<{ upiId: string; payeeName: string } | null>(() => getUpiConfig());
-  const [upiDraft, setUpiDraft] = useState({ upiId: "", payeeName: "" });
-  const [upiMsg, setUpiMsg] = useState<{ ok: boolean; text: string } | null>(null);
   useEffect(() => { let live = true; void hydrateUpiFromServer().then((cfg) => { if (live && cfg) setUpi(cfg); }); return () => { live = false; }; }, []);
   const intent = upi ? upiIntent(total, `U APP ${selected.name} plan`) : "";
 
-  const pay = () => {
+  const pay = async () => {
     setError("");
     if (!state.user) return;
     const clean = utr.replace(/\s/g, "");
@@ -239,7 +237,7 @@ export function PaymentPage() {
       setError("Confirm that you paid the exact plan amount before submitting.");
       return;
     }
-    const res = submitPayment({ planId: selected.id, method, utr: clean });
+    const res = await submitPayment({ planId: selected.id, method, utr: clean });
     if (!res.ok) {
       setError(res.message ?? "Could not create this payment request.");
       return;
@@ -313,7 +311,7 @@ export function PaymentPage() {
           <Card className="p-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2"><span className="grid h-6 w-6 place-items-center rounded-full bg-lime text-[10px] font-bold text-limeink">1</span><h2 className="text-[12.5px] font-semibold text-ink">Pay with UPI</h2></div>
-              <Badge tone="amber"><Lock className="h-3 w-3" /> Collection not configured</Badge>
+              <Badge tone={upi ? "green" : "amber"}><Lock className="h-3 w-3" /> {upi ? "Server-configured payee" : "Collection not configured"}</Badge>
             </div>
             {upi ? (
               <div className="mt-3 grid gap-3 sm:grid-cols-[auto_1fr]">
@@ -349,7 +347,7 @@ export function PaymentPage() {
                     <Lock className="mt-0.5 h-3 w-3 shrink-0 text-muted" />
                     <p className="text-[8.5px] leading-relaxed text-muted">The QR encodes the official UPI intent with the exact plan amount. Pay in your UPI app, then paste the UTR below. Your plan activates only after administrator verification.</p>
                   </div>
-                  <button onClick={() => { setUpi(null); setUpiMsg(null); }} className="mt-1.5 text-[8.5px] font-medium text-muted underline underline-offset-2 hover:text-ink">Change merchant UPI (owner)</button>
+
                 </div>
               </div>
             ) : (
@@ -357,14 +355,8 @@ export function PaymentPage() {
                 <div className="flex items-start gap-2">
                   <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
                   <div className="min-w-0 flex-1">
-                    <div className="text-[11px] font-semibold text-ink">Add the merchant UPI ID to enable QR payments</div>
-                    <p className="mt-1 text-[10px] leading-relaxed text-muted">The owner configures the real merchant UPI once. U APP never invents a UPI address. The QR is generated from this value with the exact plan amount.</p>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      <Input value={upiDraft.upiId} onChange={(e) => setUpiDraft({ ...upiDraft, upiId: e.target.value })} placeholder="business@okhdfcbank" className="h-9 font-mono text-[11px]" />
-                      <Input value={upiDraft.payeeName} onChange={(e) => setUpiDraft({ ...upiDraft, payeeName: e.target.value })} placeholder="Payee / business name" className="h-9 text-[11px]" />
-                    </div>
-                    {upiMsg && <p className={cn("mt-1.5 text-[9.5px] leading-relaxed", upiMsg.ok ? "text-emerald-500" : "text-rose-500")}>{upiMsg.text}</p>}
-                    <Button variant="lime" size="sm" className="mt-2" onClick={() => { const res = saveUpiConfig(upiDraft); setUpiMsg({ ok: res.ok, text: res.message }); if (res.ok) setUpi(getUpiConfig()); }}>Generate payment QR</Button>
+                    <div className="text-[11px] font-semibold text-ink">Merchant UPI is not configured on the server</div>
+                    <p className="mt-1 text-[10px] leading-relaxed text-muted">The owner must set the real merchant UPI through the admin API or deployment environment. Browsers cannot set or override the payee. U APP never invents a UPI address.</p>
                   </div>
                 </div>
               </div>

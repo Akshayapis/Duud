@@ -17,7 +17,7 @@ import {
   type Auth,
   type User as FirebaseUser,
 } from "firebase/auth";
-import { get, getDatabase, ref, set, update, type Database } from "firebase/database";
+import { get, getDatabase, ref, set, type Database } from "firebase/database";
 import { firebaseConfig as baseFirebaseConfig } from "@/data/catalog";
 
 /**
@@ -220,10 +220,18 @@ export async function readProfile(uid: string): Promise<RemoteProfile | null> {
   }
 }
 
+const PROFILE_WRITABLE = new Set(["name", "email", "provider", "emailVerified", "createdAt", "photo", "bio", "company", "notifyBuilds", "notifyPayments", "notifyProduct"]);
+
+/** Plan/quota fields are server/admin-only; never send them from the browser. */
 export async function writeProfile(uid: string, profile: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
   if (!db) return { ok: false, error: initError || "Realtime Database is not configured." };
+  const safe: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(profile)) if (PROFILE_WRITABLE.has(k)) safe[k] = v;
+  if (!Object.keys(safe).length) return { ok: true };
   try {
-    await update(ref(db, `users/${uid}/profile`), profile);
+    // Write each allowed child individually: RTDB rules protect plan/quota
+    // fields at the profile level, so a parent-level update would be rejected.
+    await Promise.all(Object.entries(safe).map(([k, v]) => set(ref(db, `users/${uid}/profile/${k}`), v)));
     return { ok: true };
   } catch (e) {
     return { ok: false, error: firebaseErrorMessage(e).message };

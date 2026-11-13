@@ -56,7 +56,7 @@ export const PLANS: Plan[] = [
       "All 54 UI templates",
       "Debug APK builds",
       "9-minute temporary download links",
-      "Ad SDK integration disabled",
+      "Test-mode ad integration",
       "Community support",
     ],
     active: true,
@@ -101,7 +101,7 @@ export const PLANS: Plan[] = [
     description: "For studios and agencies managing a portfolio of client applications.",
     features: [
       "50 app creation credits per 90 days",
-      "All supported ad networks",
+      "Google AdMob integration",
       "AAB + APK production builds",
       "400 MB project size",
       "Advanced custom apps",
@@ -242,12 +242,11 @@ export const TEMPLATES: Template[] = [
 export const AD_FORMATS = [
   "Banner",
   "Adaptive Banner",
+  "MREC",
   "Interstitial",
   "Rewarded",
   "Rewarded Interstitial",
-  "Native",
   "App Open",
-  "MREC",
 ];
 
 export const AD_TIMINGS = ["10 seconds", "20 seconds", "30 seconds", "40 seconds", "50 seconds", "60 seconds", "Custom"];
@@ -264,22 +263,7 @@ const appIdField = { label: "App ID", key: "app_id", hint: "From the network das
 const adUnitField = { label: "Ad Unit ID", key: "ad_unit_id", hint: "Per placement / format" };
 
 export const NETWORKS: Network[] = [
-  { id: "admob", name: "Google AdMob", formats: ["Banner", "Interstitial", "Rewarded", "Rewarded Interstitial", "Native", "App Open", "Adaptive Banner", "MREC"], docs: "https://developers.google.com/admob/android/quick-start", fields: [appIdField, adUnitField] },
-  { id: "unity", name: "Unity Ads / LevelPlay", formats: ["Banner", "Interstitial", "Rewarded"], docs: "https://docs.unity.com/ads/", fields: [appIdField, adUnitField] },
-  { id: "applovin", name: "AppLovin MAX", formats: ["Banner", "Interstitial", "Rewarded", "Native", "MREC"], docs: "https://developers.applovin.com/en/android/overview/integration/", fields: [appIdField, adUnitField] },
-  { id: "ironsource", name: "ironSource (LevelPlay)", formats: ["Banner", "Interstitial", "Rewarded"], docs: "https://developers.is.com/ironsource-mobile/android/android-sdk-integration/", fields: [appIdField, adUnitField] },
-  { id: "startio", name: "Start.io", formats: ["Banner", "Interstitial", "Rewarded"], docs: "https://support.start.io/hc/en-us", fields: [appIdField, adUnitField] },
-  { id: "yandex", name: "Yandex Ads", formats: ["Banner", "Interstitial", "Rewarded", "Native"], docs: "https://ads.yandex.com/helpcenter/en/dev/android/quick-start", fields: [appIdField, adUnitField] },
-  { id: "meta", name: "Meta Audience Network", formats: ["Banner", "Interstitial", "Rewarded", "Native"], docs: "https://developers.facebook.com/docs/audience-network/", fields: [appIdField, { label: "Placement ID", key: "placement_id", hint: "Meta placement identifier" }] },
-  { id: "inmobi", name: "InMobi", formats: ["Banner", "Interstitial", "Rewarded"], docs: "https://support.inmobi.com/", fields: [appIdField, adUnitField] },
-  { id: "pangle", name: "Pangle", formats: ["Banner", "Interstitial", "Rewarded", "App Open"], docs: "https://www.pangleglobal.com/", fields: [appIdField, adUnitField] },
-  { id: "mintegral", name: "Mintegral", formats: ["Banner", "Interstitial", "Rewarded", "Native"], docs: "https://www.mintegral.com/en/", fields: [appIdField, adUnitField] },
-  { id: "chartboost", name: "Chartboost", formats: ["Banner", "Interstitial", "Rewarded"], docs: "https://docs.chartboost.com/", fields: [appIdField, adUnitField] },
-  { id: "liftoff", name: "Liftoff Monetize", formats: ["Banner", "Interstitial", "Rewarded"], docs: "https://docs.liftoff.io/", fields: [appIdField, adUnitField] },
-  { id: "vungle", name: "Vungle / Digital Turbine", formats: ["Banner", "Interstitial", "Rewarded"], docs: "https://support.vungle.com/", fields: [appIdField, adUnitField] },
-  { id: "dtexchange", name: "DT Exchange", formats: ["Banner", "Interstitial", "Rewarded"], docs: "https://developer.digitalturbine.com/", fields: [appIdField, adUnitField] },
-  { id: "aps", name: "Amazon Publisher Services", formats: ["Banner", "MREC"], docs: "https://aps.amazon.com/aps/documentation/", fields: [appIdField, adUnitField] },
-  { id: "other", name: "Other compatible network", formats: ["Banner", "Interstitial", "Rewarded", "Native"], docs: "https://developer.android.com", fields: [{ label: "Network name", key: "network_name", hint: "Official SDK name" }, { label: "SDK documentation URL", key: "docs", hint: "Verified HTTPS documentation" }] },
+  { id: "admob", name: "Google AdMob", formats: ["Banner", "Adaptive Banner", "MREC", "Interstitial", "Rewarded", "Rewarded Interstitial", "App Open"], docs: "https://developers.google.com/admob/android/next-gen/quick-start", fields: [appIdField, adUnitField] },
 ];
 
 export const PERMISSIONS = [
